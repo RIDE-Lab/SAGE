@@ -3,6 +3,25 @@
 > A declarative, composable framework for building transparent LLM-powered systems through dataflow
 > abstractions.
 
+## ICPP 2026 Demo — Docker and Poster
+
+This branch provides the SAGE ICPP Demo delivery.
+[Docker startup and configuration](tools/icpp-demo/README.md) ·
+[Printable poster](tools/icpp-demo/docs/poster/SAGE-ICPP-Demo-Poster.pdf) ·
+[Editable SVG](tools/icpp-demo/docs/poster/SAGE-ICPP-Demo-Poster.svg).
+
+```sh
+git clone --branch icpp-demo --single-branch https://github.com/RIDE-Lab/SAGE.git
+cd SAGE/tools/icpp-demo
+sh scripts/start-hub.sh
+```
+
+Windows with Linux containers: run `scripts/start-hub.ps1` from the same directory. Open
+http://localhost:18400/ui/ after startup. The scripts create `.env` if absent. Image:
+`liujun4hust/sage-icpp-demo:20260926-cpu-full` (Linux AMD64). CPU dependencies are included; model
+weights, datasets and credentials remain separately configurable. See the deployment README for
+tested scope and limitations.
+
 ## 🚀 Quick Start
 
 ______________________________________________________________________

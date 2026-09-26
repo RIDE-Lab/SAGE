@@ -1,0 +1,19 @@
+services:
+  demo:
+    image: liujun4hust/sage-icpp-demo:20260926-cpu-full
+    init: true
+    ports:
+    - "127.0.0.1:${LOCAL_DEMO_PORT:-18400}:18400"
+    environment:
+      SAGE_LLM_BASE_URL: ${SAGE_LLM_BASE_URL:-}
+      SAGE_OPENAI_BASE_URL: ${SAGE_LLM_BASE_URL:-}
+      SAGE_LLM_MODEL: ${SAGE_LLM_MODEL:-}
+      SAGE_OPENAI_MODEL: ${SAGE_LLM_MODEL:-}
+      SAGE_OPENAI_API_KEY: ${SAGE_OPENAI_API_KEY:-EMPTY}
+      SAGE_RERANKER_BASE_URL: ${SAGE_RERANKER_BASE_URL:-}
+      SAGE_EMBEDDING_BASE_URL: ${SAGE_EMBEDDING_BASE_URL:-}
+    volumes:
+    - local-data:/data
+    restart: unless-stopped
+volumes:
+  local-data:

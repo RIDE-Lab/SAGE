@@ -1,0 +1,46 @@
+{
+  "revision": 4,
+  "pages": 1,
+  "size_mm": [
+    841.0,
+    1189.0
+  ],
+  "fonts": [
+    {
+      "basefont": "VNCKHF+DejaVuSans-Bold",
+      "type": "TrueType",
+      "embedded_bytes": 15832
+    },
+    {
+      "basefont": "LHZHTZ+DejaVuSans",
+      "type": "TrueType",
+      "embedded_bytes": 14328
+    }
+  ],
+  "span_count": 564,
+  "span_overlap_count": 0,
+  "raster_image_count": 0,
+  "png_pixels": [
+    4967,
+    7022
+  ],
+  "minimum_vector_font_pt": 29.76378059387207,
+  "exact_title": true,
+  "qr": {
+    "url": "https://github.com/RIDE-Lab/SAGE/tree/icpp-demo",
+    "width_mm": 50,
+    "quiet_zone_modules": 4,
+    "decode_checks": [
+      {
+        "dpi": 75,
+        "decoded_url": "https://github.com/RIDE-Lab/SAGE/tree/icpp-demo"
+      },
+      {
+        "dpi": 150,
+        "decoded_url": "https://github.com/RIDE-Lab/SAGE/tree/icpp-demo"
+      }
+    ]
+  },
+  "body_above_footer_pixel_identical": true,
+  "scope": "PDF geometry and artifact checks; physical printing not tested."
+}
