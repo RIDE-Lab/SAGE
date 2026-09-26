@@ -6,7 +6,8 @@ if [ ! -e .env ]; then
     echo "Created .env from .env.example; edit it to configure optional models."
 fi
 if [ "${1:-}" = "--init-env" ]; then exit 0; fi
-docker compose -p sage-icpp-demo-hub -f compose.hub.yaml pull
-docker compose -p sage-icpp-demo-hub -f compose.hub.yaml up -d --pull never --no-build --wait
-address=$(docker compose -p sage-icpp-demo-hub -f compose.hub.yaml port demo 18400)
+project="${SAGE_COMPOSE_PROJECT:-sage-icpp-demo-hub}"
+docker compose -p "$project" -f compose.hub.yaml pull
+docker compose -p "$project" -f compose.hub.yaml up -d --pull never --no-build --wait
+address=$(docker compose -p "$project" -f compose.hub.yaml port demo 18400)
 echo "Open http://$address/ui/"

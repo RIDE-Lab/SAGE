@@ -44,3 +44,8 @@ Ticket 10 条输入/5 条高优先级、Supply 10 条输入/8 条告警、Cleane
 未配置全局代理，不能宣称该宿主直接 docker pull 已测试。Windows、macOS、ARM64 运行未实测。
 
 准确摘要与发布方式见 [发布记录](docs/CPU-FULL-PUBLICATION.md)。网页端口默认仅绑定 127.0.0.1。
+
+## Authenticated cloud models
+
+See [Cloudflare model configuration and full-flow checks](docs/CLOUDFLARE-MODELS.md). Secrets belong
+in the private `.env`, never in the repository.

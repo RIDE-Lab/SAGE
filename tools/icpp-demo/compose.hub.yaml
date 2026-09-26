@@ -2,6 +2,7 @@ services:
   demo:
     image: liujun4hust/sage-icpp-demo:20260926-cpu-full
     init: true
+    entrypoint: ${SAGE_ENTRYPOINT:-/opt/delivery/scripts/entrypoint.sh}
     ports:
     - "127.0.0.1:${LOCAL_DEMO_PORT:-18400}:18400"
     environment:
@@ -10,10 +11,18 @@ services:
       SAGE_LLM_MODEL: ${SAGE_LLM_MODEL:-}
       SAGE_OPENAI_MODEL: ${SAGE_LLM_MODEL:-}
       SAGE_OPENAI_API_KEY: ${SAGE_OPENAI_API_KEY:-EMPTY}
+      SAGE_RERANKER_MODEL: ${SAGE_RERANKER_MODEL:-}
       SAGE_RERANKER_BASE_URL: ${SAGE_RERANKER_BASE_URL:-}
       SAGE_EMBEDDING_BASE_URL: ${SAGE_EMBEDDING_BASE_URL:-}
+      SAGE_EMBEDDING_MODEL: ${SAGE_EMBEDDING_MODEL:-}
+      SAGE_EMBEDDING_API_KEY: ${SAGE_EMBEDDING_API_KEY:-}
+      SAGE_EMBEDDING_PROVIDER: ${SAGE_EMBEDDING_PROVIDER:-openai}
+      SAGE_RERANKER_API_KEY: ${SAGE_RERANKER_API_KEY:-}
+      SAGE_RERANKER_PROVIDER: ${SAGE_RERANKER_PROVIDER:-openai}
+      SAGE_MODEL_TIMEOUT: ${SAGE_MODEL_TIMEOUT:-90}
     volumes:
     - local-data:/data
+    - ./scripts:/opt/demo-tools:ro
     restart: unless-stopped
 volumes:
   local-data:
