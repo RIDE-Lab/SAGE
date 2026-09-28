@@ -32,6 +32,15 @@ from .registry import (
     build_workflow_integration_registry_from_env,
     validate_workflow_product_adapter,
 )
+from .service_modes import (
+    ApplicationServiceContract,
+    ServiceMode,
+    ServiceRuntimeSnapshot,
+    compile_service_contract,
+    fetch_vllm_runtime_snapshot,
+    parse_vllm_metrics,
+    validate_mode_decision,
+)
 
 __all__ = [
     "COMFY_FIRST_EXTENSION_POINT",
@@ -61,6 +70,13 @@ __all__ = [
     "WorkflowProductAdapterDescriptor",
     "WorkflowSubmitMode",
     "build_workflow_integration_registry_from_env",
+    "ApplicationServiceContract",
+    "ServiceMode",
+    "ServiceRuntimeSnapshot",
+    "compile_service_contract",
     "default_workflow_product_extension_points",
+    "fetch_vllm_runtime_snapshot",
+    "parse_vllm_metrics",
+    "validate_mode_decision",
     "validate_workflow_product_adapter",
 ]

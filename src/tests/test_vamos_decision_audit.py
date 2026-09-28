@@ -7,8 +7,22 @@ from sage.serving.integrations.audit import (
     GENESIS_DIGEST,
     build_decision_certificate_chain,
     payload_digest,
+    verify_decision_certificate_chain,
 )
 
+
+def test_chain_verifier_rejects_tampered_decision() -> None:
+    certified, chain = build_decision_certificate_chain(
+        [_trace_row("r1"), _trace_row("r2")],
+        policy_identity="baseline:vamos",
+        policy_config={"mode": "load-aware"},
+    )
+    assert verify_decision_certificate_chain(certified, chain) == []
+    tampered = deepcopy(certified)
+    tampered[0]["decision_trace"]["effective_max_tokens"] = 999
+    assert "trace row 0 record digest mismatch" in verify_decision_certificate_chain(
+        tampered, chain
+    )
 
 def _trace_row(request_id: str) -> dict[str, object]:
     return {
@@ -62,4 +76,3 @@ def test_record_digest_detects_decision_tampering() -> None:
     expected = certificate.pop("record_digest")
     tampered["decision_trace"]["effective_max_tokens"] = 64
     assert payload_digest(tampered) != expected
-
