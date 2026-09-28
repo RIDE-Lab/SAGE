@@ -21,6 +21,7 @@ class V1ProtocolRouter:
             "missing_handler": 0,
             "dispatch_errors": 0,
         }
+        self._last_dispatch_error: dict[str, str] | None = None
 
     def register_handler(
         self,
@@ -62,13 +63,26 @@ class V1ProtocolRouter:
             if inspect.isawaitable(result):
                 result = await result
             return result
-        except Exception:
+        except Exception as exc:
             self._bump("dispatch_errors")
+            with self._lock:
+                self._last_dispatch_error = {
+                    "plane": envelope.plane,
+                    "op": envelope.op,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
             raise
 
     def stats_snapshot(self) -> dict[str, int]:
         with self._lock:
             return dict(self._stats)
+
+    def last_dispatch_error(self) -> dict[str, str] | None:
+        with self._lock:
+            if self._last_dispatch_error is None:
+                return None
+            return dict(self._last_dispatch_error)
 
     def _resolve_handler(self, key: tuple[str, str]) -> V1ProtocolHandler | None:
         with self._lock:

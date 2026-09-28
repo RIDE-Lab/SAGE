@@ -5,6 +5,7 @@ from collections.abc import Coroutine, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from os import PathLike
 from threading import Lock
 from typing import Any, Protocol
 
@@ -136,6 +137,7 @@ class V1RuntimeHost:
         collective_executor_registry: CollectiveExecutorRegistry | None = None,
         endpoint_registry: FlowEndpointRegistry | None = None,
         shared_state_registry: SharedStateServiceRegistry | None = None,
+        topic_coordinator_causal_cut_path: str | PathLike[str] | None = None,
     ) -> None:
         if comm_hub is not None and comm_transport is not None:
             raise ValueError("comm_hub and comm_transport cannot both be provided.")
@@ -233,6 +235,7 @@ class V1RuntimeHost:
                 local_address=local_address,
                 flow_program_routing_directory=flow_program_routing_directory,
                 pull_flow_program=pull_flow_program,
+                coordinator_causal_cut_path=topic_coordinator_causal_cut_path,
             )
             self._owns_topic_api = True
         else:

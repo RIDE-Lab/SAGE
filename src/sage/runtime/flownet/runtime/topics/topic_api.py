@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from os import PathLike
 from threading import Lock
 from typing import Any
 
@@ -52,6 +53,7 @@ class TopicAPI:
         routing_directory: TopicRoutingDirectory | None = None,
         flow_program_routing_directory: FlowProgramRoutingDirectory | None = None,
         coordinator_registry: TopicCoordinatorRegistry | None = None,
+        coordinator_causal_cut_path: str | PathLike[str] | None = None,
         pull_flow_program: Callable[[FlowProgramRef], Any | None] | None = None,
         time_fn: Callable[[], float] | None = None,
         on_topic_event: Callable[[dict[str, Any]], None] | None = None,
@@ -78,8 +80,13 @@ class TopicAPI:
         self.flow_program_routing_directory = (
             flow_program_routing_directory or FlowProgramRoutingDirectory()
         )
+        if coordinator_registry is not None and coordinator_causal_cut_path is not None:
+            raise ValueError(
+                "coordinator_registry and coordinator_causal_cut_path cannot both be provided."
+            )
         self.coordinator_registry = coordinator_registry or TopicCoordinatorRegistry(
             time_fn=self._time_fn,
+            causal_cut_path=coordinator_causal_cut_path,
         )
         self.subscriber_registry = TopicSubscriberRegistry(time_fn=self._time_fn)
         self._on_topic_event = on_topic_event
@@ -96,6 +103,11 @@ class TopicAPI:
         self._ledger_manager = EventGroupLedgerManager(
             time_fn=self._time_fn,
             on_request_done=self._handle_request_done,
+            on_ledger_mutation=(
+                self.coordinator_registry.commit_event_group
+                if self.coordinator_registry.causal_cut_enabled
+                else None
+            ),
         )
         self._subscriber_progress = SubscriberProgressManager(
             time_fn=self._time_fn,

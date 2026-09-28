@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from os import PathLike
 from typing import Any, Literal
 
 from sage.runtime.flownet.runtime import (
@@ -63,6 +64,7 @@ def bootstrap_runtime(
     comm_hub: V1CommHub | None = None,
     comm_transport: V1TransportBackend | None = None,
     comm_transport_mode: str | None = None,
+    topic_coordinator_causal_cut_path: str | PathLike[str] | None = None,
 ) -> V1BootstrapHandle:
     """
     v1 bootstrap entrypoint draft.
@@ -112,6 +114,7 @@ def bootstrap_runtime(
         local_address=normalized_local_address,
         comm_hub=comm_hub,
         comm_transport=resolved_comm_transport,
+        topic_coordinator_causal_cut_path=topic_coordinator_causal_cut_path,
     )
     return V1BootstrapHandle(
         runtime_host=runtime_host,

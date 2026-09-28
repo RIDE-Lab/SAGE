@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Lock
+from typing import Any
 
 from sage.runtime.flownet.runtime.topics.normalization import (
     _normalize_non_empty,
@@ -30,6 +35,9 @@ class EventGroupLedger:
     outcome_error_stage: str | None = None
     outcome_metadata: dict[str, object] = field(default_factory=dict)
     observed_flow_program_revs: set[str] = field(default_factory=set)
+    payload_digest: str | None = None
+    lineage_digest: str | None = None
+    commit_index: int = 0
     updated_at: float = field(default_factory=time.time)
 
 
@@ -52,10 +60,44 @@ class TopicCoordinatorRegistry:
     State is lazy and keyed by (topic_uri, epoch).
     """
 
-    def __init__(self, *, time_fn: Callable[[], float] | None = None):
+    def __init__(
+        self,
+        *,
+        time_fn: Callable[[], float] | None = None,
+        causal_cut_path: str | os.PathLike[str] | None = None,
+    ):
         self._states: dict[tuple[str, int], CoordinatorTopicState] = {}
         self._lock = Lock()
+        self._persistence_lock = Lock()
         self._time_fn = time_fn or time.time
+        self._causal_cut_path = (
+            Path(causal_cut_path).expanduser().resolve() if causal_cut_path is not None else None
+        )
+        self._commit_index = 0
+        self._durable_commit_index = 0
+        if self._causal_cut_path is not None and self._causal_cut_path.exists():
+            self._restore_causal_cut()
+
+    @property
+    def causal_cut_enabled(self) -> bool:
+        return self._causal_cut_path is not None
+
+    def commit_event_group(
+        self,
+        *,
+        state: CoordinatorTopicState,
+        ledger: EventGroupLedger,
+    ) -> int:
+        """Durably publish a monotonic coordinator causal cut when enabled."""
+        if self._causal_cut_path is None:
+            return int(ledger.commit_index)
+        with self._persistence_lock:
+            self._commit_index += 1
+            ledger.commit_index = self._commit_index
+            payload = self._causal_cut_payload()
+            self._write_causal_cut(payload)
+            self._durable_commit_index = self._commit_index
+            return int(ledger.commit_index)
 
     def get_or_create(self, topic_uri: str, epoch: int) -> CoordinatorTopicState:
         normalized_topic_uri = _normalize_topic_uri(topic_uri)
@@ -214,7 +256,179 @@ class TopicCoordinatorRegistry:
                 "max": round(max_delay_ms, 3),
             },
             "queues": queue_rows,
+            "causal_cut_enabled": self.causal_cut_enabled,
+            "causal_cut_commit_index": self._commit_index,
+            "causal_cut_durable_commit_index": self._durable_commit_index,
         }
+
+    def _causal_cut_payload(self) -> dict[str, Any]:
+        with self._lock:
+            states = sorted(self._states.values(), key=lambda item: (item.topic_uri, item.epoch))
+            state_rows = []
+            for state in states:
+                ledgers = []
+                for ledger in sorted(
+                    state.event_group_ledgers.values(), key=lambda item: item.event_group_id
+                ):
+                    ledgers.append(
+                        {
+                            "event_group_id": ledger.event_group_id,
+                            "admission_epoch": ledger.admission_epoch,
+                            "first_admitted_at": ledger.first_admitted_at,
+                            "completed_at": ledger.completed_at,
+                            "event_chain_pending": ledger.event_chain_pending,
+                            "producer_done": ledger.producer_done,
+                            "emitted_event_count": ledger.emitted_event_count,
+                            "final_seq": ledger.final_seq,
+                            "expected_total_events_hint": ledger.expected_total_events_hint,
+                            "request_done_emitted": ledger.request_done_emitted,
+                            "outcome_status": ledger.outcome_status,
+                            "outcome_error_type": ledger.outcome_error_type,
+                            "outcome_error_message": ledger.outcome_error_message,
+                            "outcome_error_stage": ledger.outcome_error_stage,
+                            "outcome_metadata": ledger.outcome_metadata,
+                            "observed_flow_program_revs": sorted(ledger.observed_flow_program_revs),
+                            "payload_digest": ledger.payload_digest,
+                            "lineage_digest": ledger.lineage_digest,
+                            "commit_index": ledger.commit_index,
+                            "updated_at": ledger.updated_at,
+                        }
+                    )
+                state_rows.append(
+                    {
+                        "topic_uri": state.topic_uri,
+                        "epoch": state.epoch,
+                        "event_group_ledgers": ledgers,
+                        "updated_at": state.updated_at,
+                    }
+                )
+        return {
+            "schema_version": 1,
+            "commit_index": self._commit_index,
+            "states": state_rows,
+        }
+
+    def _write_causal_cut(self, payload: dict[str, Any]) -> None:
+        assert self._causal_cut_path is not None
+        encoded_payload = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        envelope = {
+            "schema_version": 1,
+            "payload_sha256": hashlib.sha256(encoded_payload).hexdigest(),
+            "payload": payload,
+        }
+        encoded_envelope = (
+            json.dumps(envelope, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+        ).encode("utf-8")
+        target = self._causal_cut_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+        with temporary.open("wb") as stream:
+            stream.write(encoded_envelope)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    def _restore_causal_cut(self) -> None:
+        assert self._causal_cut_path is not None
+        try:
+            envelope = json.loads(self._causal_cut_path.read_text(encoding="utf-8"))
+            if envelope.get("schema_version") != 1:
+                raise ValueError("unsupported_schema")
+            payload = envelope["payload"]
+            encoded_payload = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            actual_digest = hashlib.sha256(encoded_payload).hexdigest()
+            if actual_digest != envelope.get("payload_sha256"):
+                raise ValueError("digest_mismatch")
+            if payload.get("schema_version") != 1:
+                raise ValueError("unsupported_payload_schema")
+            restored_states = self._decode_states(payload.get("states"))
+            commit_index = _normalize_non_negative_int(
+                payload.get("commit_index"), field_name="commit_index"
+            )
+        except Exception as exc:
+            raise RuntimeError(f"causal_cut_restore_failed:{exc}") from exc
+        self._states = restored_states
+        self._commit_index = commit_index
+        self._durable_commit_index = commit_index
+
+    @staticmethod
+    def _decode_states(raw_states: Any) -> dict[tuple[str, int], CoordinatorTopicState]:
+        if not isinstance(raw_states, list):
+            raise TypeError("states must be a list")
+        restored: dict[tuple[str, int], CoordinatorTopicState] = {}
+        for raw_state in raw_states:
+            if not isinstance(raw_state, dict):
+                raise TypeError("state must be an object")
+            topic_uri = _normalize_topic_uri(raw_state.get("topic_uri"))
+            epoch = _normalize_non_negative_int(raw_state.get("epoch"), field_name="epoch")
+            state = CoordinatorTopicState(
+                topic_uri=topic_uri,
+                epoch=epoch,
+                updated_at=float(raw_state.get("updated_at") or time.time()),
+            )
+            raw_ledgers = raw_state.get("event_group_ledgers")
+            if not isinstance(raw_ledgers, list):
+                raise TypeError("event_group_ledgers must be a list")
+            for raw_ledger in raw_ledgers:
+                if not isinstance(raw_ledger, dict):
+                    raise TypeError("ledger must be an object")
+                event_group_id = _normalize_non_empty(
+                    raw_ledger.get("event_group_id"), field_name="event_group_id"
+                )
+                ledger = EventGroupLedger(
+                    event_group_id=event_group_id,
+                    admission_epoch=raw_ledger.get("admission_epoch"),
+                    first_admitted_at=raw_ledger.get("first_admitted_at"),
+                    completed_at=raw_ledger.get("completed_at"),
+                    event_chain_pending=_normalize_non_negative_int(
+                        raw_ledger.get("event_chain_pending"),
+                        field_name="event_chain_pending",
+                    ),
+                    producer_done=bool(raw_ledger.get("producer_done")),
+                    emitted_event_count=_normalize_non_negative_int(
+                        raw_ledger.get("emitted_event_count"),
+                        field_name="emitted_event_count",
+                    ),
+                    final_seq=raw_ledger.get("final_seq"),
+                    expected_total_events_hint=raw_ledger.get("expected_total_events_hint"),
+                    request_done_emitted=bool(raw_ledger.get("request_done_emitted")),
+                    outcome_status=str(raw_ledger.get("outcome_status") or "pending"),
+                    outcome_error_type=raw_ledger.get("outcome_error_type"),
+                    outcome_error_message=raw_ledger.get("outcome_error_message"),
+                    outcome_error_stage=raw_ledger.get("outcome_error_stage"),
+                    outcome_metadata=dict(raw_ledger.get("outcome_metadata") or {}),
+                    observed_flow_program_revs=set(
+                        raw_ledger.get("observed_flow_program_revs") or []
+                    ),
+                    payload_digest=raw_ledger.get("payload_digest"),
+                    lineage_digest=raw_ledger.get("lineage_digest"),
+                    commit_index=_normalize_non_negative_int(
+                        raw_ledger.get("commit_index"), field_name="commit_index"
+                    ),
+                    updated_at=float(raw_ledger.get("updated_at") or time.time()),
+                )
+                if ledger.admission_epoch != epoch:
+                    raise ValueError("admission_epoch_mismatch")
+                if ledger.commit_index < 1:
+                    raise ValueError("invalid_commit_index")
+                state.event_group_ledgers[event_group_id] = ledger
+            restored[(topic_uri, epoch)] = state
+        return restored
 
     @staticmethod
     def _has_unfinished_event_group(state: CoordinatorTopicState) -> bool:

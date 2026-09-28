@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from typing import Any
+
+import cloudpickle
 
 from sage.runtime.flownet.runtime.topics.coordinator_registry import (
     CoordinatorTopicState,
@@ -21,9 +24,11 @@ class EventGroupLedgerManager:
         *,
         time_fn: Callable[[], float],
         on_request_done: Callable[[dict[str, Any]], None] | None = None,
+        on_ledger_mutation: Callable[..., int] | None = None,
     ) -> None:
         self._time_fn = time_fn
         self._on_request_done = on_request_done
+        self._on_ledger_mutation = on_ledger_mutation
 
     def normalize_event_group_id(self, event_group_id: str) -> str:
         return _normalize_non_empty(event_group_id, field_name="event_group_id")
@@ -55,7 +60,7 @@ class EventGroupLedgerManager:
         if ledger is None:
             return None
         version_info = _version_snapshot(ledger.observed_flow_program_revs)
-        return {
+        snapshot = {
             "event_group_id": ledger.event_group_id,
             "admission_epoch": ledger.admission_epoch,
             "first_admitted_at": ledger.first_admitted_at,
@@ -75,6 +80,15 @@ class EventGroupLedgerManager:
             "version_count": version_info["version_count"],
             "mixed_version_violation": version_info["mixed_version_violation"],
         }
+        if ledger.commit_index > 0:
+            snapshot.update(
+                {
+                    "payload_digest": ledger.payload_digest,
+                    "lineage_digest": ledger.lineage_digest,
+                    "commit_index": ledger.commit_index,
+                }
+            )
+        return snapshot
 
     def apply_outcome(
         self,
@@ -110,6 +124,7 @@ class EventGroupLedgerManager:
                 ledger.outcome_metadata = {}
         ledger.updated_at = self._time_fn()
         state.updated_at = ledger.updated_at
+        self._commit_ledger(state=state, ledger=ledger)
         version_info = _version_snapshot(ledger.observed_flow_program_revs)
         return {
             "topic_uri": state.topic_uri,
@@ -167,6 +182,12 @@ class EventGroupLedgerManager:
         if ledger.admission_epoch is None:
             ledger.admission_epoch = state.epoch
         ledger.emitted_event_count += 1
+        if callable(self._on_ledger_mutation):
+            payload_digest = hashlib.sha256(cloudpickle.dumps(payload)).hexdigest()
+            previous_lineage = ledger.lineage_digest or ("0" * 64)
+            lineage_record = f"{previous_lineage}:{normalized_seq}:{payload_digest}".encode()
+            ledger.payload_digest = payload_digest
+            ledger.lineage_digest = hashlib.sha256(lineage_record).hexdigest()
         if normalized_seq is not None:
             if ledger.final_seq is None or normalized_seq > ledger.final_seq:
                 ledger.final_seq = normalized_seq
@@ -174,6 +195,7 @@ class EventGroupLedgerManager:
         if ledger.first_admitted_at is None:
             ledger.first_admitted_at = ledger.updated_at
         state.updated_at = ledger.updated_at
+        self._commit_ledger(state=state, ledger=ledger)
         return {
             "topic_uri": state.topic_uri,
             "epoch": state.epoch,
@@ -202,6 +224,8 @@ class EventGroupLedgerManager:
         ledger.updated_at = self._time_fn()
         state.updated_at = ledger.updated_at
         request_done = self._maybe_request_done(state=state, ledger=ledger)
+        if request_done is None:
+            self._commit_ledger(state=state, ledger=ledger)
         return {
             "topic_uri": state.topic_uri,
             "epoch": state.epoch,
@@ -233,6 +257,8 @@ class EventGroupLedgerManager:
         ledger.updated_at = self._time_fn()
         state.updated_at = ledger.updated_at
         request_done = self._maybe_request_done(state=state, ledger=ledger)
+        if request_done is None:
+            self._commit_ledger(state=state, ledger=ledger)
         return {
             "topic_uri": state.topic_uri,
             "epoch": state.epoch,
@@ -301,9 +327,27 @@ class EventGroupLedgerManager:
             "version_count": version_info["version_count"],
             "mixed_version_violation": version_info["mixed_version_violation"],
         }
+        self._commit_ledger(state=state, ledger=ledger)
+        if ledger.commit_index > 0:
+            request_done.update(
+                {
+                    "payload_digest": ledger.payload_digest,
+                    "lineage_digest": ledger.lineage_digest,
+                    "commit_index": ledger.commit_index,
+                }
+            )
         if callable(self._on_request_done):
             self._on_request_done(dict(request_done))
         return request_done
+
+    def _commit_ledger(
+        self,
+        *,
+        state: CoordinatorTopicState,
+        ledger: EventGroupLedger,
+    ) -> None:
+        if callable(self._on_ledger_mutation):
+            self._on_ledger_mutation(state=state, ledger=ledger)
 
 
 _OUTCOME_FAILURE_STATUSES = frozenset({"failed", "aborted", "dropped"})
