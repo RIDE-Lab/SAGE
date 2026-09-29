@@ -6,7 +6,7 @@ SAGE、OPC、前后端和 CPU 应用依赖，不包含 CUDA、模型权重、用
 ## 拉取并启动
 
 ```sh
-git clone https://github.com/intellistream/SAGE.git
+git clone https://github.com/RIDE-Lab/SAGE.git
 cd SAGE/tools/icpp-demo
 sh scripts/start-hub.sh
 ```

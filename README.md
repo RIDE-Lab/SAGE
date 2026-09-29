@@ -35,7 +35,7 @@ and the printable poster. See the [deployment guide](tools/icpp-demo/README.md) 
 [poster](tools/icpp-demo/docs/poster/SAGE-ICPP-Demo-Poster.pdf).
 
 ```sh
-git clone https://github.com/intellistream/SAGE.git
+git clone https://github.com/RIDE-Lab/SAGE.git
 cd SAGE/tools/icpp-demo
 sh scripts/start-hub.sh
 ```
