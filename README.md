@@ -28,6 +28,20 @@ boundaries. See [GOVERNANCE.md](./GOVERNANCE.md) for the stewardship contract.
   [OpenReview](https://openreview.net/forum?id=TXcFJdT7at) |
   [author PDF](https://shuhao.sage.org.ai/contents/research_papers/2026/2026_sage_icml_2026.pdf).
 
+## ICPP 2026 Demo
+
+The CPU demo delivery includes Docker startup scripts, model-provider adapters, validation tools,
+and the printable poster. See the [deployment guide](tools/icpp-demo/README.md) and
+[poster](tools/icpp-demo/docs/poster/SAGE-ICPP-Demo-Poster.pdf).
+
+```sh
+git clone https://github.com/intellistream/SAGE.git
+cd SAGE/tools/icpp-demo
+sh scripts/start-hub.sh
+```
+
+The image includes application dependencies but not model weights, datasets, or credentials.
+
 ## Current Scope
 
 The main repository now provides the installable SAGE core:
