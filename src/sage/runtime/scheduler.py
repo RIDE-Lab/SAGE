@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -251,6 +252,55 @@ def _has_scheduler_interface(value: Any) -> bool:
     return callable(getattr(value, "make_decision", None))
 
 
+def _normalize_scheduler_name(raw_value: Any) -> str:
+    normalized = str(raw_value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        raise ValueError("scheduler name must be a non-empty string.")
+    return normalized
+
+
+def _coerce_positive_int(raw_value: Any, *, field_name: str) -> int:
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a positive integer.") from exc
+    if value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer.")
+    return value
+
+
+def _resolve_scheduler_from_mapping(*, scheduler: Mapping[str, Any], platform: str):
+    scheduler_type = (
+        scheduler.get("type")
+        or scheduler.get("name")
+        or scheduler.get("kind")
+    )
+    if scheduler_type is None:
+        raise ValueError(
+            "scheduler mapping must include one of: 'type', 'name', or 'kind'."
+        )
+
+    scheduler_name = _normalize_scheduler_name(scheduler_type)
+    if scheduler_name == "fifo":
+        return FIFOScheduler(platform=platform)
+    if scheduler_name in {"load_aware", "loadaware"}:
+        strategy = str(scheduler.get("strategy") or "balanced").strip() or "balanced"
+        max_concurrent = _coerce_positive_int(
+            scheduler.get("max_concurrent", 10),
+            field_name="scheduler.max_concurrent",
+        )
+        return LoadAwareScheduler(
+            platform=platform,
+            max_concurrent=max_concurrent,
+            strategy=strategy,
+        )
+
+    raise ValueError(
+        "Unknown scheduler type: "
+        f"{scheduler_type}. Available options: 'fifo', 'load_aware'"
+    )
+
+
 def create_default_scheduler(*, platform: str):
     return FIFOScheduler(platform=platform)
 
@@ -260,7 +310,7 @@ def resolve_scheduler(*, scheduler: Any, platform: str):
         return create_default_scheduler(platform=platform)
 
     if isinstance(scheduler, str):
-        scheduler_lower = scheduler.lower()
+        scheduler_lower = _normalize_scheduler_name(scheduler)
         if scheduler_lower == "fifo":
             return FIFOScheduler(platform=platform)
         if scheduler_lower in {"load_aware", "loadaware"}:
@@ -269,11 +319,14 @@ def resolve_scheduler(*, scheduler: Any, platform: str):
             f"Unknown scheduler type: {scheduler}. Available options: 'fifo', 'load_aware'"
         )
 
+    if isinstance(scheduler, Mapping):
+        return _resolve_scheduler_from_mapping(scheduler=scheduler, platform=platform)
+
     if _has_scheduler_interface(scheduler):
         return scheduler
 
     raise TypeError(
-        "scheduler must be None, str, or an object implementing make_decision(), "
+        "scheduler must be None, str, mapping, or an object implementing make_decision(), "
         f"got {type(scheduler)}"
     )
 

@@ -257,11 +257,46 @@ def test_packet_and_stop_signal_are_main_repo_owned() -> None:
 def test_scheduler_resolution_uses_in_tree_implementations() -> None:
     fifo = resolve_scheduler(scheduler="fifo", platform="local")
     load_aware = resolve_scheduler(scheduler="load_aware", platform="local")
+    configured_load_aware = resolve_scheduler(
+        scheduler={
+            "type": "load-aware",
+            "strategy": "spread",
+            "max_concurrent": 4,
+        },
+        platform="local",
+    )
 
     assert isinstance(fifo, FIFOScheduler)
     assert isinstance(load_aware, LoadAwareScheduler)
+    assert isinstance(configured_load_aware, LoadAwareScheduler)
     assert fifo.get_metrics()["scheduler_type"] == "FIFO"
     assert load_aware.get_metrics()["scheduler_type"] == "LoadAware"
+    assert configured_load_aware.strategy == "spread"
+    assert configured_load_aware.max_concurrent == 4
+
+
+def test_scheduler_resolution_accepts_scheduler_mapping_aliases() -> None:
+    scheduler = resolve_scheduler(
+        scheduler={
+            "name": "load aware",
+            "strategy": "pack",
+            "max_concurrent": 2,
+        },
+        platform="local",
+    )
+
+    assert isinstance(scheduler, LoadAwareScheduler)
+    assert scheduler.strategy == "pack"
+    assert scheduler.max_concurrent == 2
+
+
+def test_scheduler_resolution_rejects_scheduler_mapping_without_type() -> None:
+    try:
+        resolve_scheduler(scheduler={"strategy": "spread"}, platform="local")
+    except ValueError as exc:
+        assert "scheduler mapping must include one of" in str(exc)
+    else:  # pragma: no cover - defensive guard
+        raise AssertionError("resolve_scheduler() should reject mapping configs without type")
 
 
 def test_local_environment_batch_submit_runs_without_kernel_dependency() -> None:
