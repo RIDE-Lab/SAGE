@@ -54,6 +54,8 @@ class EvidenceWork:
     candidate_digest: str
     research: bool = False
     assessment: CoverageAssessment | None = None
+    assessment_failure: str | None = None
+    rejected_assessment: str | None = None
     queries: tuple[str, ...] = ()
     repair_attempted: bool = False
     plan: SourceAnswerPlan | None = None
@@ -81,12 +83,51 @@ def select_evidence(work):
 
 @stateless(uri="stateless://sage/evidence/assess", namespace="sage")
 def assess(work):
-    # No source can witness any factual requirement: avoid a pointless model
-    # round trip, but still route the explicit gaps through permission-aware repair.
-    assessment = (validate_coverage(work.request, _ports.get().assess(work.request))
-        if work.request.sources else CoverageAssessment(work.request.digest, tuple(
-            RequirementCoverage(r.requirement_id, ()) for r in work.request.requirements)))
-    return replace(work, assessment=assessment, queries=repair_queries(work.request, assessment))
+    # A coverage gap is valid data. An invalid model serialization may get
+    # ONE explicit native correction node, using the identical bound request.
+    if not work.request.sources:
+        assessment = CoverageAssessment(work.request.digest, tuple(
+            RequirementCoverage(r.requirement_id, ()) for r in work.request.requirements))
+    else:
+        raw = _ports.get().assess(work.request)
+        try:
+            assessment = validate_coverage(work.request, raw)
+        except InvalidEvidenceCoverage as exc:
+            if exc.code == "invalid_request_or_receipt" or not callable(getattr(_ports.get(), "repair_assessment", None)):
+                raise
+            return replace(work, assessment=None, queries=(), assessment_failure=exc.code,
+                rejected_assessment=raw)
+    return replace(work, assessment=assessment, queries=repair_queries(work.request, assessment),
+        assessment_failure=None, rejected_assessment=None)
+
+
+@stateless(uri="stateless://sage/evidence/assessment-invalid", namespace="sage")
+def assessment_invalid(work):
+    return work.assessment_failure is not None
+
+
+@stateless(uri="stateless://sage/evidence/assessment-valid", namespace="sage")
+def assessment_valid(work):
+    return work.assessment_failure is None
+
+
+@stateless(uri="stateless://sage/evidence/correct-assessment", namespace="sage")
+def correct_assessment(work):
+    if work.assessment_failure is None or work.rejected_assessment is None:
+        raise InvalidEvidenceCoverage("correction requires a rejected assessment")
+    raw = _ports.get().repair_assessment(work.request, work.rejected_assessment, work.assessment_failure)
+    # Never turn invalid output into empty witnesses, trust a model passed flag,
+    # rebind a digest, widen sources, or recurse on a second invalid response.
+    assessment = validate_coverage(work.request, raw)
+    return replace(work, assessment=assessment, queries=repair_queries(work.request, assessment),
+        assessment_failure=None, rejected_assessment=None)
+
+
+def _assessed(stream, prefix):
+    checked = stream.map(assess, operator_key=prefix)
+    corrected = checked.filter(assessment_invalid, operator_key=prefix+"-invalid").map(
+        correct_assessment, operator_key=prefix+"-correction")
+    return corrected.connect(checked.filter(assessment_valid, operator_key=prefix+"-valid"))
 
 
 @stateless(uri="stateless://sage/evidence/needs-repair", namespace="sage")
@@ -202,11 +243,10 @@ def verify(work):
 
 @flow(uri="flow://sage/evidence-quality", namespace="sage")
 def evidence_quality_flow(init_stream):
-    checked = init_stream.map(select_evidence, operator_key="select-evidence").map(
-        assess, operator_key="assess-coverage")
-    repaired = checked.filter(needs_repair, operator_key="coverage-gap").map(
+    checked = _assessed(init_stream.map(select_evidence, operator_key="select-evidence"), "assess-coverage")
+    repaired = _assessed(checked.filter(needs_repair, operator_key="coverage-gap").map(
         supplement, operator_key="supplement-evidence").map(
-        select_evidence, operator_key="select-repaired-evidence").map(assess, operator_key="reassess-coverage")
+        select_evidence, operator_key="select-repaired-evidence"), "reassess-coverage")
     planned = repaired.connect(checked.filter(no_repair, operator_key="coverage-ready")).map(
         compose, operator_key="compose-source-plan")
     reviewed = planned.filter(research_requested, operator_key="research-experiments").map(

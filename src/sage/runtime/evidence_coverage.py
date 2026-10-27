@@ -18,7 +18,24 @@ from sage.runtime.source_audit import AnswerValidationRejected
 
 
 class InvalidEvidenceCoverage(AnswerValidationRejected):
-    """Stale, incomplete or unwitnessed assessment; never a transport retry."""
+    """Invalid mapping: never evidence admission or a transport retry."""
+
+    @property
+    def code(self):
+        # Only fixed validator categories may cross diagnostic/model boundaries.
+        reasons = {
+            "invalid coverage JSON": "invalid_json",
+            "duplicate JSON key": "duplicate_key",
+            "stale or malformed coverage": "stale_or_malformed",
+            "coverage items required": "items_required",
+            "invalid coverage item": "invalid_item",
+            "unknown or duplicate requirement": "invalid_requirement",
+            "invalid witness": "invalid_witness",
+            "witness range not in authorized source": "witness_out_of_range",
+            "empty witness range": "empty_witness",
+            "incomplete requirement coverage": "incomplete_requirements",
+        }
+        return reasons.get(str(self), "invalid_request_or_receipt")
 
 
 @dataclass(frozen=True)
@@ -137,6 +154,19 @@ def prepare_coverage(
 
 
 def coverage_response_format(request: CoverageRequest) -> dict:
+    # Bind each source ID to its OWN line range. A global maximum admits
+    # line 200 for a one-line web snippet whenever another source is longer.
+    def witness_schema(source):
+        maximum = len(source.content.splitlines(keepends=True))
+        return {"type": "object", "additionalProperties": False,
+            "required": ["source_id", "start_line", "end_line"], "properties": {
+                "source_id": {"type": "string", "enum": [source.source_id]},
+                "start_line": {"type": "integer", "minimum": 1, "maximum": maximum},
+                "end_line": {"type": "integer", "minimum": 1, "maximum": maximum}}}
+    witnesses = {"type": "array", "items": {"anyOf": [witness_schema(s) for s in request.sources]}}
+    if not request.sources:
+        witnesses = {"type": "array", "maxItems": 0, "items": {"type": "object",
+            "additionalProperties": False, "properties": {}, "required": []}}
     return {"type": "json_schema", "json_schema": {"name": "evidence_coverage", "strict": True,
         "schema": {"type": "object", "additionalProperties": False,
             "required": ["digest", "items"], "properties": {
@@ -146,14 +176,7 @@ def coverage_response_format(request: CoverageRequest) -> dict:
                         "type": "object", "additionalProperties": False,
                         "required": ["requirement_id", "witnesses"], "properties": {
                             "requirement_id": {"type": "string", "enum": [r.requirement_id for r in request.requirements]},
-                            "witnesses": {"type": "array", **({} if request.sources else {"maxItems": 0}), "items": {
-                                "type": "object", "additionalProperties": False,
-                                "required": ["source_id", "start_line", "end_line"], "properties": {
-                                    "source_id": {"type": "string", "enum": [s.source_id for s in request.sources] or [""]},
-                                    "start_line": {"type": "integer", "minimum": 1,
-                                        "maximum": max((len(s.content.splitlines()) for s in request.sources), default=1)},
-                                    "end_line": {"type": "integer", "minimum": 1,
-                                        "maximum": max((len(s.content.splitlines()) for s in request.sources), default=1)}}}}}}}}}}}
+                            "witnesses": witnesses}}}}}}}
 
 
 def _unique(pairs):

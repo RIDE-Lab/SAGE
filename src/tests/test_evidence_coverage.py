@@ -135,3 +135,28 @@ def test_request_cannot_be_rebound_while_reusing_the_digest(field):
         "requirements": (EvidenceRequirement("all", 0, 5),), "payload": req.payload+" "}
     with pytest.raises(InvalidEvidenceCoverage):
         validate_coverage(replace(req, **{field: replacements[field]}), response(req))
+
+
+def test_decoder_schema_binds_line_numbers_to_each_source():
+    from jsonschema import Draft202012Validator
+    req = prepare_coverage('Explain the pipeline?', question_requirements('Explain the pipeline?'), (
+        PlanSource('wiki', 'Pipeline', 'https://example.org/wiki', 'prefill\ndecode\nverification'),
+        PlanSource('web', 'Snippet', 'https://example.org/web', 'One line only.'),
+    ))
+    schema = coverage_response_format(req)['json_schema']['schema']
+    validator = Draft202012Validator(schema)
+    def mapping(source, end):
+        return {'digest': req.digest, 'items': [{'requirement_id': 'question',
+            'witnesses': [{'source_id': source, 'start_line': 1, 'end_line': end}]}]}
+    assert validator.is_valid(mapping('wiki', 3))
+    assert validator.is_valid(mapping('web', 1))
+    assert not validator.is_valid(mapping('web', 3))
+    assert not validator.is_valid(mapping('private-not-authorized', 1))
+    # Decoder constraints supplement the unchanged, mandatory runtime gate.
+    with pytest.raises(InvalidEvidenceCoverage, match='range not in authorized'):
+        validate_coverage(req, json.dumps(mapping('web', 3)))
+
+
+def test_diagnostics_never_forward_unrecognized_model_or_exception_text():
+    assert InvalidEvidenceCoverage('witness range not in authorized source').code == 'witness_out_of_range'
+    assert InvalidEvidenceCoverage('secret-or-source-body').code == 'invalid_request_or_receipt'

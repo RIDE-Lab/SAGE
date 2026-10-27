@@ -280,3 +280,61 @@ def test_nested_quality_failure_preserves_leaf_type_for_durable_classification()
         endpoint.close()
         runtime.close()
         bootstrap.shutdown()
+
+
+def test_invalid_mapping_gets_one_visible_strict_correction():
+    class Correctable(Ports):
+        def assess(self, request):
+            self.calls.append(('initial-invalid', request.digest))
+            return '{not json'
+        def repair_assessment(self, request, rejected, code):
+            self.calls.append(('correct', request.digest))
+            assert rejected == '{not json' and code == 'invalid_json'
+            return Ports.assess(self, request)
+    runtime, ports, events = EvidenceWorkflowRuntime(), Correctable(), []
+    try:
+        with ExecutionObserver(events.append, trace_id='correct-coverage').bind():
+            result = runtime.run('Explain A?', (SOURCE,), ports, timeout=5)
+        assert result.assessment and result.rejected_assessment is None
+        assert sum(kind == 'correct' for kind, _ in ports.calls) == 1
+        assert any(e.operator_key == 'assess-coverage-correction' for e in events)
+        assert SOURCE.content in render_evidence_work(result)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize('bad', ['{}', '{not json', json.dumps({'digest':'other','items':[]})])
+def test_invalid_correction_fails_closed_without_recursion_or_composition(bad):
+    class BadCorrection(Ports):
+        corrections = 0
+        def assess(self, request): return '{}'
+        def repair_assessment(self, request, rejected, code):
+            self.corrections += 1
+            return bad
+        def compose(self, *args):
+            pytest.fail('invalid mapping cannot reach composition')
+    runtime, ports = EvidenceWorkflowRuntime(), BadCorrection()
+    try:
+        with pytest.raises(FlowRequestOutcomeError) as caught:
+            runtime.run('Explain A?', (SOURCE,), ports, timeout=5)
+        assert caught.value.error_type == 'InvalidEvidenceCoverage'
+        assert ports.corrections == 1
+    finally:
+        runtime.close()
+
+
+def test_source_mutation_during_correction_is_not_admitted():
+    class Mutating(Ports):
+        def assess(self, request): return '{}'
+        def repair_assessment(self, request, rejected, code):
+            changed = replace(request.sources[0], content='Forged facts.')
+            object.__setattr__(request, 'sources', (changed,))
+            return Ports.assess(self, request)
+        def compose(self, *args): pytest.fail('changed snapshot cannot reach composition')
+    runtime = EvidenceWorkflowRuntime()
+    try:
+        with pytest.raises(FlowRequestOutcomeError) as caught:
+            runtime.run('Explain A?', (SOURCE,), Mutating(), timeout=5)
+        assert caught.value.error_type == 'InvalidEvidenceCoverage'
+    finally:
+        runtime.close()
