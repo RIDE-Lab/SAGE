@@ -29,23 +29,16 @@ from sage.runtime.research_experiments import (
     validate_experiments,
 )
 from sage.runtime.source_answer_plan import (
-    PLAN_SYSTEM_PROMPT,
     PlanSource,
     SourceAnswerBlock,
     SourceAnswerPlan,
     prepare_source_plan,
     render_source_plan_blocks,
-    validate_source_plan,
 )
 
 _ports = ContextVar("sage_evidence_workflow_ports")
 
 from sage.runtime.answer_task import AnswerTask
-
-COVERED_PLAN_SYSTEM_PROMPT = PLAN_SYSTEM_PROMPT + """
-Retain ALL sources used by coverage witnesses. A missing coverage item is an
-evidence boundary, never proof of absence.
-"""
 
 @dataclass(frozen=True)
 class EvidenceWork:
@@ -163,9 +156,13 @@ def compose(work):
     if not work.request.sources:
         return replace(work, answer="当前允许检索的来源不足以回答这个问题；这不表示相关事实不存在。")
     request = prepare_source_plan(work.request.question, work.request.sources, allow_inferences=False)
-    plan = validate_source_plan(request, _ports.get().compose(request, work.assessment))
-    if plan.inferences:
-        raise InvalidEvidenceCoverage("composition cannot author freeform research claims")
+    # Coverage already bound the permitted facts to exact source witnesses.
+    # A second model choosing document IDs could add unrelated documents,
+    # even when EVERY requirement had empty witnesses. Derive the plan from
+    # the validated receipt instead; ordering follows the candidate snapshot.
+    used = {w.source_id for item in work.assessment.items for w in item.witnesses}
+    plan = SourceAnswerPlan(request.digest,
+        tuple(source.source_id for source in request.sources if source.source_id in used), ())
     if work.research:
         final_request = prepare_source_plan(work.request.question, work.request.sources, allow_inferences=True)
         plan = SourceAnswerPlan(final_request.digest, plan.source_ids, ())
@@ -216,8 +213,8 @@ def render_evidence_work_blocks(work: EvidenceWork) -> tuple[SourceAnswerBlock, 
             if work.plan.inferences != render_experiments(experiments, work.experiment_plan):
                 raise InvalidEvidenceCoverage("research prose differs from canonical experiment plan")
         used = {w.source_id for item in work.assessment.items for w in item.witnesses}
-        if not used <= set(work.plan.source_ids):
-            raise InvalidEvidenceCoverage("composition omitted mapped evidence")
+        if used != set(work.plan.source_ids):
+            raise InvalidEvidenceCoverage("composition differs from mapped evidence")
         parts = list(render_source_plan_blocks(request, work.plan))
     if gaps:
         # These are original question spans, not model-authored negative claims.

@@ -5,6 +5,20 @@ from __future__ import annotations
 import re
 
 
+def interleave_source_candidates(lanes, per_source_limit):
+    """Keep each independently ranked source's bounded candidate budget.
+
+    Adding an authorized source must not evict candidates from another source.
+    Scores from different indexes are deliberately never compared here.
+    This forms a candidate pool, not a final answer/evidence selection.
+    """
+    if type(per_source_limit) is not int or per_source_limit < 1:
+        raise ValueError("positive per-source candidate limit required")
+    bounded = tuple(tuple(lane[:per_source_limit]) for lane in lanes)
+    return tuple(item for rank in range(per_source_limit) for lane in bounded
+                 for item in lane[rank:rank+1])
+
+
 def question_identifiers(question: str) -> tuple[str, ...]:
     """Literal acronym/mixed-case/versioned identifiers, never inferred roles.
 

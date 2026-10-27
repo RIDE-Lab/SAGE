@@ -146,7 +146,7 @@ def test_unresolved_after_one_repair_is_not_hidden_or_claimed_false():
     runtime, ports = EvidenceWorkflowRuntime(), Ports(no_evidence=True)
     try:
         result = runtime.run("Does B exist?", (SOURCE,), ports, timeout=5)
-        assert [c[0] for c in ports.calls] == ["assess", "supplement", "assess", "compose"]
+        assert [c[0] for c in ports.calls] == ["assess", "supplement", "assess"]
         assert result.assessment.missing_ids == ("question",)
         assert "仍待补充的依据" in result.answer and "> Does B exist?" in result.answer
         assert "不能据此认定相关事实不存在" in result.answer
@@ -161,10 +161,10 @@ def test_research_distinguishes_source_unknowns_from_generated_experimental_desi
     runtime = EvidenceWorkflowRuntime()
     try:
         result = runtime.run("Review A", (SOURCE,), Ports(no_evidence=True), timeout=3, research=True)
-        assert result.experiment_plan is not None
-        assert "## 来源事实边界" in result.answer
-        assert "不代表项目当前实现、已有实验或验证状态" in result.answer
-        assert SOURCE.content in result.answer and "一次可复现的不变量违反" in result.answer
+        assert result.experiment_plan is None
+        assert "仍待补充的依据" in result.answer
+        assert SOURCE.content not in result.answer
+        assert "一次可复现的不变量违反" not in result.answer
     finally:
         runtime.close()
 
@@ -174,7 +174,7 @@ def test_research_activates_actual_experiment_plan_and_formal_checks_not_a_route
     try:
         with ExecutionObserver(events.append).bind():
             result = runtime.run("Propose an experiment about A", (SOURCE,), ports, timeout=5, research=True)
-        assert [c[0] for c in ports.calls] == ["assess", "compose", "experiments"]
+        assert [c[0] for c in ports.calls] == ["assess", "experiments"]
         assert any(e.operator_key == "plan-experiments" and e.state == "completed" for e in events)
         assert "单侧置信上界低于" in result.answer and SOURCE.content in result.answer
         assert "一次可复现的不变量违反" in result.answer
@@ -187,10 +187,10 @@ def test_research_activates_actual_experiment_plan_and_formal_checks_not_a_route
 def test_source_coverage_may_not_be_discarded_by_composition_and_failure_recovers():
     runtime = EvidenceWorkflowRuntime()
     try:
-        with pytest.raises(FlowRequestOutcomeError):
-            runtime.run("A?", (SOURCE,), Ports(omit=True), timeout=3)
         result = runtime.run("A?", (SOURCE,), Ports(), timeout=3)
         assert SOURCE.content in result.answer
+        with pytest.raises(InvalidEvidenceCoverage, match="differs from mapped evidence"):
+            render_evidence_work(replace(result, plan=replace(result.plan, source_ids=())))
         assert runtime._endpoint._requests == {}
         with pytest.raises(InvalidEvidenceCoverage):
             render_evidence_work(replace(result, request=replace(result.request, digest="stale")))
@@ -336,5 +336,20 @@ def test_source_mutation_during_correction_is_not_admitted():
         with pytest.raises(FlowRequestOutcomeError) as caught:
             runtime.run('Explain A?', (SOURCE,), Mutating(), timeout=5)
         assert caught.value.error_type == 'InvalidEvidenceCoverage'
+    finally:
+        runtime.close()
+
+
+def test_empty_witnesses_cannot_publish_an_unrelated_document():
+    ports, runtime = Ports(no_evidence=True), EvidenceWorkflowRuntime()
+    ports.compose = lambda *args: pytest.fail('a model must not override coverage source selection')
+    try:
+        result = runtime.run('How is a response generated?', (SOURCE,), ports, timeout=5)
+        assert result.plan.source_ids == ()
+        assert SOURCE.content not in result.answer
+        assert result.assessment.missing_ids == ('question',)
+        forged = replace(result, plan=replace(result.plan, source_ids=(SOURCE.source_id,)))
+        with pytest.raises(InvalidEvidenceCoverage, match='differs from mapped evidence'):
+            render_evidence_work(forged)
     finally:
         runtime.close()

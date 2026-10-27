@@ -32,3 +32,15 @@ def test_no_discriminating_match_preserves_semantic_candidates():
 def test_subject_is_literal_and_not_substring():
     assert subject_candidate_indices(("Alpha",), ("Alphanumeric", "Alpha")) == (1,)
     assert subject_candidate_indices(("A+B",), ("AAB", "A+B")) == (1,)
+
+
+def test_adding_source_cannot_evict_existing_candidates():
+    from sage.runtime.evidence_relevance import interleave_source_candidates
+    wiki = ['w1', 'w2', 'correct-inference', 'w4', 'w5', 'overflow']
+    private = ['p1', 'p2', 'p3', 'p4', 'p5', 'overflow']
+    public = interleave_source_candidates([wiki], 5)
+    member = interleave_source_candidates([wiki, private], 5)
+    assert public == tuple(wiki[:5])
+    assert set(public) <= set(member)
+    assert member == ('w1','p1','w2','p2','correct-inference','p3','w4','p4','w5','p5')
+    assert 'overflow' not in member
