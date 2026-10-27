@@ -53,7 +53,7 @@ class Ports:
     def assess(self, request):
         self.calls.append(("assess", request.digest))
         return json.dumps({"digest": request.digest, "items": [{"requirement_id": r.requirement_id,
-            "witnesses": [] if self.no_evidence or self.missing and len(request.sources)<2 else [
+            "witnesses": [] if self.no_evidence or self.missing and not any(call[0] == "supplement" for call in self.calls) else [
                 {"source_id": s.source_id, "start_line": 1, "end_line": len(s.content.splitlines())} for s in request.sources]}
             for r in request.requirements]})
 
@@ -108,7 +108,10 @@ def test_repair_reselects_against_complete_candidates_and_stable_ids():
     runtime, ports = EvidenceWorkflowRuntime(), Ports(missing=True)
     wrong = replace(SOURCE, source_id="manual", content="generic methodology")
     found = replace(SUPPLEMENT, source_id="specific", title="ExampleState", content="ExampleState owns state.")
-    ports.supplement = lambda queries: (found,)
+    def supplement(queries):
+        ports.calls.append(("supplement", queries))
+        return (found,)
+    ports.supplement = supplement
     try:
         result = runtime.run("ExampleState?", (wrong,), ports, timeout=5)
         assert result.candidates == (wrong, found)
@@ -204,6 +207,7 @@ def test_empty_retrieval_can_repair_without_inventing_a_source():
         found = runtime.run("B?", (), Ports(missing=True), timeout=3,
             requirements=(EvidenceRequirement("all", 0, 2),))
         assert found.repair_attempted and SUPPLEMENT.content in found.answer
+        assert found.assessment.missing_ids == ()
         missing = runtime.run("B?", (), Ports(no_evidence=True), timeout=3)
         assert missing.plan is None and "不存在" in missing.answer
     finally:
