@@ -53,7 +53,7 @@ class Ports:
     def assess(self, request):
         self.calls.append(("assess", request.digest))
         return json.dumps({"digest": request.digest, "items": [{"requirement_id": r.requirement_id,
-            "witnesses": [] if self.no_evidence or self.missing and not any(call[0] == "supplement" for call in self.calls) else [
+            "witnesses": [] if self.no_evidence or self.missing and (not any(call[0] == "supplement" for call in self.calls) or request.question == "A and B?" and len(request.sources) < 2) else [
                 {"source_id": s.source_id, "start_line": 1, "end_line": len(s.content.splitlines())} for s in request.sources]}
             for r in request.requirements]})
 
@@ -355,5 +355,43 @@ def test_empty_witnesses_cannot_publish_an_unrelated_document():
         forged = replace(result, plan=replace(result.plan, source_ids=(SOURCE.source_id,)))
         with pytest.raises(InvalidEvidenceCoverage, match='differs from mapped evidence'):
             render_evidence_work(forged)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_smaller_source_must_be_revalidated_for_the_whole_question(complete):
+    short = replace(SOURCE, source_id='short', content='A owns state. B composes extensions.')
+    long = replace(SUPPLEMENT, source_id='long', content='A owns state. B composes extensions.\n' + 'Other matters.\n'*100)
+    class FocusPorts(Ports):
+        def assess(self, request):
+            if len(request.sources)==1 and not complete:
+                return json.dumps({'digest':request.digest,'items':[{'requirement_id':r.requirement_id,'witnesses':[]} for r in request.requirements]})
+            return super().assess(request)
+    runtime, events = EvidenceWorkflowRuntime(), []
+    try:
+        with ExecutionObserver(events.append).bind():
+            result = runtime.run('What do A and B do?', (long,short), FocusPorts(), timeout=5)
+        assert result.request.sources == (long,short)
+        assert result.assessment.missing_ids == ()
+        assert result.plan.source_ids == (('short',) if complete else ('long','short'))
+        assert (long.content in result.answer) is not complete
+        assert short.content in result.answer
+        assert any(e.operator_key=='minimize-evidence' and e.state=='completed' for e in events)
+        if complete:
+            with pytest.raises(InvalidEvidenceCoverage):
+                render_evidence_work(replace(result, focused_assessment=replace(result.focused_assessment,digest='stale')))
+    finally:
+        runtime.close()
+
+
+def test_invalid_smaller_source_assessment_is_not_silently_accepted():
+    class BadFocus(Ports):
+        def assess(self, request):
+            return 'invalid' if len(request.sources)==1 else super().assess(request)
+    runtime = EvidenceWorkflowRuntime()
+    try:
+        with pytest.raises(FlowRequestOutcomeError):
+            runtime.run('What do A and B do?', (SOURCE,SUPPLEMENT), BadFocus(), timeout=5)
     finally:
         runtime.close()

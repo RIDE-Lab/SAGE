@@ -49,6 +49,7 @@ class EvidenceWork:
     assessment: CoverageAssessment | None = None
     assessment_failure: str | None = None
     rejected_assessment: str | None = None
+    focused_assessment: CoverageAssessment | None = None
     queries: tuple[str, ...] = ()
     repair_attempted: bool = False
     plan: SourceAnswerPlan | None = None
@@ -160,13 +161,45 @@ def compose(work):
     # A second model choosing document IDs could add unrelated documents,
     # even when EVERY requirement had empty witnesses. Derive the plan from
     # the validated receipt instead; ordering follows the candidate snapshot.
-    used = {w.source_id for item in work.assessment.items for w in item.witnesses}
+    used = _answer_source_ids(work)
     plan = SourceAnswerPlan(request.digest,
         tuple(source.source_id for source in request.sources if source.source_id in used), ())
     if work.research:
         final_request = prepare_source_plan(work.request.question, work.request.sources, allow_inferences=True)
         plan = SourceAnswerPlan(final_request.digest, plan.source_ids, ())
     return replace(work, plan=plan)
+
+
+def _focus_request(work):
+    if work.assessment is None or work.assessment.missing_ids:
+        return None
+    used = {w.source_id for item in work.assessment.items for w in item.witnesses}
+    if len(used) <= 1:
+        return None
+    smallest = min((s for s in work.request.sources if s.source_id in used),
+                   key=lambda s: (len(s.content.encode('utf-8')), s.source_id))
+    return prepare_coverage(work.request.question, work.request.requirements, (smallest,))
+
+
+def _answer_source_ids(work):
+    if work.focused_assessment is not None:
+        focused = _focus_request(work)
+        if focused is None or missing_question_spans(focused, work.focused_assessment):
+            raise InvalidEvidenceCoverage("source reduction requires complete fresh coverage")
+        return {w.source_id for item in work.focused_assessment.items for w in item.witnesses}
+    return {w.source_id for item in work.assessment.items for w in item.witnesses}
+
+
+@stateless(uri="stateless://sage/evidence/minimize", namespace="sage")
+def minimize_evidence(work):
+    """One bounded test of a smaller source, never a relevance/truth shortcut."""
+    focused = _focus_request(work)
+    if focused is None:
+        return work
+    assessment = validate_coverage(focused, _ports.get().assess(focused))
+    # A valid gap preserves the original multi-source receipt. Malformed or
+    # forged mappings fail closed rather than being treated as a rejection vote.
+    return replace(work, focused_assessment=assessment if not assessment.missing_ids else None)
 
 
 def _research_requested(work):
@@ -212,7 +245,7 @@ def render_evidence_work_blocks(work: EvidenceWork) -> tuple[SourceAnswerBlock, 
             experiments = prepare_experiments(request, work.plan.source_ids)
             if work.plan.inferences != render_experiments(experiments, work.experiment_plan):
                 raise InvalidEvidenceCoverage("research prose differs from canonical experiment plan")
-        used = {w.source_id for item in work.assessment.items for w in item.witnesses}
+        used = _answer_source_ids(work)
         if used != set(work.plan.source_ids):
             raise InvalidEvidenceCoverage("composition differs from mapped evidence")
         parts = list(render_source_plan_blocks(request, work.plan))
@@ -245,7 +278,7 @@ def evidence_quality_flow(init_stream):
         supplement, operator_key="supplement-evidence").map(
         select_evidence, operator_key="select-repaired-evidence"), "reassess-coverage")
     planned = repaired.connect(checked.filter(no_repair, operator_key="coverage-ready")).map(
-        compose, operator_key="compose-source-plan")
+        minimize_evidence, operator_key="minimize-evidence").map(compose, operator_key="compose-source-plan")
     reviewed = planned.filter(research_requested, operator_key="research-experiments").map(
         plan_experiments, operator_key="plan-experiments").connect(
         planned.filter(research_not_requested, operator_key="no-experiment-plan"))
