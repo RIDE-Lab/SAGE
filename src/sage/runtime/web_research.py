@@ -100,6 +100,24 @@ class WebIntent:
             raise ValueError("invalid web intent")
         return cls(**value)
 
+    def validate_query(self, question):
+        """Validate the proposed span, without expanding its disclosure scope."""
+        if self.disclosure != "public":
+            return
+        query = self.query
+        if not query or not query.strip() or query not in question or len(query) > 512:
+            raise ValueError("public web query requires a verbatim current-question subject")
+        # A one-character slice of a larger word is not a complete subject.
+        # Standalone/quoted characters remain legal (e.g. asking about '大').
+        if len(query) == 1 and query.isalnum():
+            occurrences = tuple(re.finditer(re.escape(query), question))
+            if all(
+                (m.start() > 0 and (question[m.start()-1].isalnum() or question[m.start()-1] == "_"))
+                or (m.end() < len(question) and (question[m.end()].isalnum() or question[m.end()] == "_"))
+                for m in occurrences
+            ):
+                raise ValueError("public web query is a one-character word fragment")
+
 
 @dataclass(frozen=True)
 class WebDecision:
@@ -143,7 +161,9 @@ def decide_web_research(
     if contains_private_context or intent.disclosure != "public":
         return denied("未确认可公开的搜索主题；私密或含糊内容不会发送到外部搜索。")
     query = intent.query
-    if not query or not query.strip() or query not in question or len(query) > 512:
+    try:
+        intent.validate_query(question)
+    except ValueError:
         return denied("缺少可逐字核对的当前问题搜索主题，本轮未搜索。")
     # Defense in depth, not a claim of complete secret/PII detection.
     if re.search(

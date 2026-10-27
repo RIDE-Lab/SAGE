@@ -97,3 +97,22 @@ def test_observations_distinguish_skip_running_empty_failure_and_sources():
     assert events[-1][0] == "failed" and "private upstream" not in str(events)
     assert execute_web_research(decision(), lambda _: ["source"], observe) == ["source"]
     assert events[-1][0] == "completed"
+
+
+def test_public_query_cannot_shrink_a_word_to_one_character():
+    intent = WebIntent(need='sources', disclosure='public', query='大')
+    with pytest.raises(ValueError, match='word fragment'):
+        intent.validate_query('大模型生成一段回答，背后经历了哪些步骤？')
+    decision = decide_web_research(question='大模型生成一段回答，背后经历了哪些步骤？',
+        mode='auto',identity='account',intent=intent)
+    assert not decision.allowed and decision.query is None
+    # A genuine standalone single-character subject is not banned.
+    quoted = '请搜索“大”的字源。'
+    intent.validate_query(quoted)
+    assert decide_web_research(question=quoted,mode='always',identity='guest',intent=intent).allowed
+
+
+def test_public_query_missing_or_rewritten_is_rejected_without_expanding_question():
+    for query in (None, '', 'rewritten external subject'):
+        with pytest.raises(ValueError, match='verbatim'):
+            WebIntent(need='sources',disclosure='public',query=query).validate_query('A public subject?')
