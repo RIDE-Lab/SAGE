@@ -116,3 +116,11 @@ def test_public_query_missing_or_rewritten_is_rejected_without_expanding_questio
     for query in (None, '', 'rewritten external subject'):
         with pytest.raises(ValueError, match='verbatim'):
             WebIntent(need='sources',disclosure='public',query=query).validate_query('A public subject?')
+
+
+def test_stable_explanation_can_omit_unused_query_but_never_search_none():
+    intent=WebIntent(need='none',disclosure='public',query=None)
+    intent.validate_query('Explain a stable concept.')
+    for mode in ('auto','always'):
+        assert not decide_web_research(question='Explain a stable concept.',mode=mode,
+            identity='guest',intent=intent).allowed

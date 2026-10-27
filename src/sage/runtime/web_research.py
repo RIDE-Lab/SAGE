@@ -105,6 +105,8 @@ class WebIntent:
         if self.disclosure != "public":
             return
         query = self.query
+        if self.need == "none" and query is None:
+            return  # A stable explanation need not invent an outbound query.
         if not query or not query.strip() or query not in question or len(query) > 512:
             raise ValueError("public web query requires a verbatim current-question subject")
         # A one-character slice of a larger word is not a complete subject.
@@ -161,6 +163,8 @@ def decide_web_research(
     if contains_private_context or intent.disclosure != "public":
         return denied("未确认可公开的搜索主题；私密或含糊内容不会发送到外部搜索。")
     query = intent.query
+    if not query or not query.strip() or query not in question or len(query) > 512:
+        return denied("缺少可逐字核对的当前问题搜索主题，本轮未搜索。")
     try:
         intent.validate_query(question)
     except ValueError:
