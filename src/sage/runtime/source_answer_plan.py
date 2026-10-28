@@ -161,7 +161,7 @@ class SourceAnswerBlock:
     suggestions must never inherit a preceding source's authority or URL.
     """
 
-    kind: Literal["notice", "source", "source_link", "inference"]
+    kind: Literal["answer", "notice", "source", "source_link", "inference"]
     markdown: str
     source_id: str | None = None
     source_url: str | None = None

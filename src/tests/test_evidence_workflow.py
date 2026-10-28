@@ -22,7 +22,7 @@ from sage.runtime.flownet import (
 )
 from sage.runtime.source_answer_plan import PlanSource
 
-SOURCE = PlanSource("a", "A", "https://example.org/a", "A owns state. [Full link](https://example.org/long/path)")
+SOURCE = PlanSource("a", "A", "https://example.org/a", "A owns state.")
 SUPPLEMENT = PlanSource("b", "B", "https://example.org/b", "B composes extensions.\n\n- complete\n  - nested")
 
 
@@ -53,7 +53,7 @@ class Ports:
     def assess(self, request):
         self.calls.append(("assess", request.digest))
         return json.dumps({"digest": request.digest, "items": [{"requirement_id": r.requirement_id,
-            "witnesses": [] if self.no_evidence or self.missing and (not any(call[0] == "supplement" for call in self.calls) or request.question == "A and B?" and len(request.sources) < 2) else [
+            "witnesses": [] if self.no_evidence or self.missing and request.sources[0].source_id != "answer" and (not any(call[0] == "supplement" for call in self.calls) or request.question == "A and B?" and len(request.sources) < 2) else [
                 {"source_id": s.source_id, "start_line": 1, "end_line": len(s.content.splitlines())} for s in request.sources]}
             for r in request.requirements]})
 
@@ -66,6 +66,19 @@ class Ports:
         return json.dumps({"digest": request.digest,
             "source_ids": [] if self.omit else [s.source_id for s in request.sources],
             "inferences": []})
+
+    def write_answer(self, request, rejected=None, failures=()):
+        data = json.loads(request.payload)
+        # Deterministic test prose; real paraphrase/entailment has live acceptance.
+        text = "\n\n".join(s["content"] for s in data["sources"])
+        import re
+        text = re.sub(r"\[([^]]+)\]\(https?://[^)]+\)", r"\1", text)
+        return json.dumps({"digest": request.digest, "paragraphs": [text]})
+
+    def audit_answer(self, request):
+        return json.dumps({"digest": request.digest, "units": [
+            {"id": i, "verdict": "supported", "evidence": [{"source_id": request.sources[0][0], "line_ids": [0]}]}
+            for i in range(len(request.units))]})
 
     def plan_experiments(self, request, plan):
         self.calls.append(("experiments", request.digest))
@@ -86,7 +99,7 @@ def test_named_subject_selection_excludes_unrelated_long_manual_without_losing_p
     manual = replace(SOURCE, source_id="manual", title="Wiki | unrelated manual", content="unrelated text\n"*25000)
     original = ports.assess
     def assess_selected(request):
-        assert request.sources == (wanted,)
+        assert request.sources == (wanted,) or request.sources[0].source_id == "answer"
         assert "unrelated text" not in request.payload
         return original(request)
     ports.assess = assess_selected
@@ -177,7 +190,7 @@ def test_research_activates_actual_experiment_plan_and_formal_checks_not_a_route
     try:
         with ExecutionObserver(events.append).bind():
             result = runtime.run("Propose an experiment about A", (SOURCE,), ports, timeout=5, research=True)
-        assert [c[0] for c in ports.calls] == ["assess", "experiments"]
+        assert [c[0] for c in ports.calls] == ["assess", "experiments", "assess"]
         assert any(e.operator_key == "plan-experiments" and e.state == "completed" for e in events)
         assert "单侧置信上界低于" in result.answer and SOURCE.content in result.answer
         assert "一次可复现的不变量违反" in result.answer
@@ -233,7 +246,7 @@ def test_shared_runtime_keeps_concurrent_model_and_retrieval_ports_scoped():
             original = ports.assess
             def assess(request):
                 barrier.wait(3)
-                assert request.sources == (source,)
+                assert request.sources == (source,) or request.sources[0].source_id == "answer"
                 return original(request)
             ports.assess = assess
             return runtime.run(f"Question {index}", (source,), ports, timeout=5)
@@ -289,6 +302,8 @@ def test_nested_quality_failure_preserves_leaf_type_for_durable_classification()
 def test_invalid_mapping_gets_one_visible_strict_correction():
     class Correctable(Ports):
         def assess(self, request):
+            if request.sources[0].source_id == 'answer':
+                return Ports.assess(self, request)
             self.calls.append(('initial-invalid', request.digest))
             return '{not json'
         def repair_assessment(self, request, rejected, code):
@@ -365,7 +380,7 @@ def test_smaller_source_must_be_revalidated_for_the_whole_question(complete):
     long = replace(SUPPLEMENT, source_id='long', content='A owns state. B composes extensions.\n' + 'Other matters.\n'*100)
     class FocusPorts(Ports):
         def assess(self, request):
-            if len(request.sources)==1 and not complete:
+            if len(request.sources)==1 and request.sources[0].source_id != "answer" and not complete:
                 return json.dumps({'digest':request.digest,'items':[{'requirement_id':r.requirement_id,'witnesses':[]} for r in request.requirements]})
             return super().assess(request)
     runtime, events = EvidenceWorkflowRuntime(), []

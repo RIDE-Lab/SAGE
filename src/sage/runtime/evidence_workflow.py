@@ -36,6 +36,11 @@ from sage.runtime.source_answer_plan import (
     render_source_plan_blocks,
 )
 
+from sage.runtime.natural_answer import (
+    NaturalAnswerReceipt, prepare_natural_answer, validate_natural_answer, audit_failures,
+)
+from sage.runtime.source_audit import prepare_source_audit, SourceAuditRejected
+
 _ports = ContextVar("sage_evidence_workflow_ports")
 
 from sage.runtime.answer_task import AnswerTask
@@ -55,6 +60,9 @@ class EvidenceWork:
     plan: SourceAnswerPlan | None = None
     answer: str | None = None
     experiment_plan: ExperimentPlan | None = None
+    natural: NaturalAnswerReceipt | None = None
+    draft: str | None = None
+    answer_failures: tuple[str, ...] = ()
 
 
 def _selected_request(work):
@@ -170,6 +178,62 @@ def compose(work):
     return replace(work, plan=plan)
 
 
+def _natural_request(work):
+    used = set(work.plan.source_ids)
+    return prepare_natural_answer(work.request.question,
+        tuple(s for s in work.request.sources if s.source_id in used))
+
+
+def _audit_request(work, answer):
+    used = set(work.plan.source_ids)
+    return prepare_source_audit(work.request.question, answer,
+        {s.source_id: s.content for s in work.request.sources if s.source_id in used})
+
+
+def _answer_coverage_request(work, answer):
+    return prepare_coverage(work.request.question, work.request.requirements,
+        (PlanSource("answer", "Answer", "", answer),))
+
+
+def _review_failures(work, receipt):
+    if receipt.request_digest != _natural_request(work).digest:
+        raise SourceAuditRejected("stale natural answer receipt")
+    failed = tuple("unit:" + str(i) for i in audit_failures(_audit_request(work, receipt.answer), receipt.audit))
+    coverage = validate_coverage(_answer_coverage_request(work, receipt.answer), receipt.coverage)
+    # Preserve every aspect that the authorized source assessment could cover.
+    missing = set(coverage.missing_ids) - set(work.assessment.missing_ids)
+    return failed + tuple("question:" + i for i in sorted(missing))
+
+
+@stateless(uri="stateless://sage/evidence/write-answer", namespace="sage")
+def write_answer(work):
+    if work.plan is None or not work.plan.source_ids:
+        return work
+    request = _natural_request(work)
+    answer = validate_natural_answer(request, _ports.get().write_answer(request, work.draft, work.answer_failures))
+    return replace(work, draft=answer, natural=None, answer_failures=())
+
+
+@stateless(uri="stateless://sage/evidence/review-answer", namespace="sage")
+def review_answer(work):
+    if work.draft is None:
+        return work
+    receipt = NaturalAnswerReceipt(_natural_request(work).digest, work.draft,
+        _ports.get().audit_answer(_audit_request(work, work.draft)),
+        _ports.get().assess(_answer_coverage_request(work, work.draft)))
+    return replace(work, natural=receipt, answer_failures=_review_failures(work, receipt))
+
+
+@stateless(uri="stateless://sage/evidence/answer-rejected", namespace="sage")
+def answer_rejected(work):
+    return bool(work.answer_failures)
+
+
+@stateless(uri="stateless://sage/evidence/answer-accepted", namespace="sage")
+def answer_accepted(work):
+    return not work.answer_failures
+
+
 def _focus_request(work):
     if work.assessment is None or work.assessment.missing_ids:
         return None
@@ -248,7 +312,16 @@ def render_evidence_work_blocks(work: EvidenceWork) -> tuple[SourceAnswerBlock, 
         used = _answer_source_ids(work)
         if used != set(work.plan.source_ids):
             raise InvalidEvidenceCoverage("composition differs from mapped evidence")
-        parts = list(render_source_plan_blocks(request, work.plan))
+        if work.plan.source_ids:
+            if work.natural is None or _review_failures(work, work.natural):
+                raise SourceAuditRejected("natural answer failed source or completeness review")
+            if work.draft != work.natural.answer:
+                raise SourceAuditRejected("answer changed after review")
+            parts = [SourceAnswerBlock("answer", work.natural.answer)]
+            if work.plan.inferences:
+                parts.extend(b for b in render_source_plan_blocks(request, work.plan) if b.kind == "inference")
+        else:
+            parts = [SourceAnswerBlock("notice", "当前允许检索的来源不足以回答这个问题；这不表示相关事实不存在。")]
     if gaps:
         # These are original question spans, not model-authored negative claims.
         quoted = "\n".join("> " + line for query in gaps for line in query.splitlines())
@@ -282,7 +355,12 @@ def evidence_quality_flow(init_stream):
     reviewed = planned.filter(research_requested, operator_key="research-experiments").map(
         plan_experiments, operator_key="plan-experiments").connect(
         planned.filter(research_not_requested, operator_key="no-experiment-plan"))
-    return reviewed.map(verify, operator_key="verify-evidence-answer")
+    drafted = reviewed.map(write_answer, operator_key="write-natural-answer").map(
+        review_answer, operator_key="review-natural-answer")
+    corrected = drafted.filter(answer_rejected, operator_key="answer-needs-correction").map(
+        write_answer, operator_key="correct-natural-answer").map(review_answer, operator_key="review-corrected-answer")
+    return corrected.connect(drafted.filter(answer_accepted, operator_key="answer-review-passed")).map(
+        verify, operator_key="verify-evidence-answer")
 
 
 class EvidenceWorkflowRuntime:

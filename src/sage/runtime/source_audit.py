@@ -90,7 +90,7 @@ def prepare_source_audit(question: str, answer: str, sources: dict[str, str]) ->
     # unsupported inference appended in the same Markdown bullet/paragraph.
     units = tuple(
         sentence for line in answer.splitlines()
-        for sentence in re.split(r"(?<=[。！？])|(?<=[.!?])(?=\s)", line)
+        for sentence in re.split(r"(?<=[。！？])|(?<=[.!?])(?=\s)(?<!\d\.)", line)
         if sentence.strip()
     )
     if (

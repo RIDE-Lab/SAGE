@@ -157,3 +157,10 @@ def test_supported_sentence_cannot_mask_appended_inference_or_split_urls():
         "资料提醒设计不等于收益。", "这意味着目前只是理论。", "来源 https://lab.example.org/a/b/。",
     )
     assert "".join(request.units) == answer
+
+
+def test_numbered_steps_are_not_split_into_spurious_numeric_claims():
+    request = prepare_source_audit("Steps?", "1. Process input.\n2. Generate output.", {"s":"Process input then generate output."})
+    assert request.units == ("1. Process input.", "2. Generate output.")
+    bad = prepare_source_audit("Status?", "1. Still researching. No tests exist.", {"s":"Still researching."})
+    assert bad.units == ("1. Still researching.", " No tests exist.")
