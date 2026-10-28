@@ -8,6 +8,8 @@ round, never automatic replay of business writes or an unbounded model loop.
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 
+from sage.runtime.answer_task import AnswerTask
+from sage.runtime.coverage_partition import assess_source_groups
 from sage.runtime.evidence_coverage import (
     CoverageAssessment,
     CoverageRequest,
@@ -22,6 +24,12 @@ from sage.runtime.evidence_coverage import (
 )
 from sage.runtime.evidence_relevance import question_identifiers, subject_candidate_indices
 from sage.runtime.flownet import bootstrap_runtime, build_runtime_client, flow, stateless
+from sage.runtime.natural_answer import (
+    NaturalAnswerReceipt,
+    audit_failures,
+    prepare_natural_answer,
+    validate_natural_answer,
+)
 from sage.runtime.research_experiments import (
     ExperimentPlan,
     prepare_experiments,
@@ -35,16 +43,10 @@ from sage.runtime.source_answer_plan import (
     prepare_source_plan,
     render_source_plan_blocks,
 )
-
-from sage.runtime.natural_answer import (
-    NaturalAnswerReceipt, prepare_natural_answer, validate_natural_answer, audit_failures,
-)
-from sage.runtime.source_audit import prepare_source_audit, SourceAuditRejected
-from sage.runtime.coverage_partition import assess_source_groups
+from sage.runtime.source_audit import SourceAuditRejected, prepare_source_audit
 
 _ports = ContextVar("sage_evidence_workflow_ports")
 
-from sage.runtime.answer_task import AnswerTask
 
 @dataclass(frozen=True)
 class EvidenceWork:
@@ -94,7 +96,8 @@ def assess(work):
         assessment = CoverageAssessment(work.request.digest, tuple(
             RequirementCoverage(r.requirement_id, ()) for r in work.request.requirements))
     else:
-        raw = assess_source_groups(work.request, _ports.get().assess)
+        raw = assess_source_groups(work.request, _ports.get().assess,
+            getattr(_ports.get(), "repair_assessment", None))
         try:
             assessment = validate_coverage(work.request, raw)
         except InvalidEvidenceCoverage as exc:
@@ -143,6 +146,16 @@ def needs_repair(work):
 @stateless(uri="stateless://sage/evidence/no-repair", namespace="sage")
 def no_repair(work):
     return not work.queries
+
+
+@stateless(uri="stateless://sage/evidence/plan-retrieval-repair", namespace="sage")
+def plan_retrieval_repair(work):
+    planner = getattr(_ports.get(), "plan_retrieval_repair", None)
+    if planner is None:
+        return work
+    from sage.runtime.evidence_query_plan import validate_query_plan
+    raw = planner(work.request, work.assessment)
+    return replace(work, queries=validate_query_plan(work.request, work.assessment, raw))
 
 
 @stateless(uri="stateless://sage/evidence/supplement", namespace="sage")
@@ -352,6 +365,7 @@ def verify(work):
 def evidence_quality_flow(init_stream):
     checked = _assessed(init_stream.map(select_evidence, operator_key="select-evidence"), "assess-coverage")
     repaired = _assessed(checked.filter(needs_repair, operator_key="coverage-gap").map(
+        plan_retrieval_repair, operator_key="plan-retrieval-repair").map(
         supplement, operator_key="supplement-evidence").map(
         select_evidence, operator_key="select-repaired-evidence"), "reassess-coverage")
     planned = repaired.connect(checked.filter(no_repair, operator_key="coverage-ready")).map(

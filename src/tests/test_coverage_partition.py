@@ -49,3 +49,38 @@ def test_child_receipt_cannot_forge_other_group_or_parent_digest():
 
 def test_invalid_normal_mapping_keeps_existing_correction_path():
     assert assess_source_groups(request(),lambda r:'invalid')=='invalid'
+
+
+def test_partition_child_repair_is_bound_and_runs_only_once():
+    parent = request(2)
+    calls, repairs = [], []
+    def assess(child):
+        calls.append(child.digest)
+        if len(child.sources) > 1:
+            raise ModelRequestRejected('prompt_capacity')
+        return '{}' if child.sources[0].source_id == '1' else mapping(child)
+    def repair(child, rejected, code):
+        repairs.append(child)
+        assert rejected == '{}' and code == 'stale_or_malformed'
+        assert len(child.sources) == 1 and child.sources[0] == parent.sources[1]
+        assert child.question == parent.question
+        return mapping(child)
+    receipt = validate_coverage(parent, assess_source_groups(parent, assess, repair))
+    assert len(calls) == 3 and len(repairs) == 1
+    assert not receipt.missing_ids
+
+
+@pytest.mark.parametrize('result', ['{}', 'invalid'])
+def test_invalid_partition_correction_does_not_retry_or_become_empty_gap(result):
+    parent = request(2)
+    repairs = []
+    def assess(child):
+        if len(child.sources) > 1:
+            raise ModelRequestRejected('prompt_capacity')
+        return '{}'
+    def repair(child, raw, code):
+        repairs.append(child.digest)
+        return result
+    with pytest.raises(InvalidEvidenceCoverage):
+        assess_source_groups(parent, assess, repair)
+    assert len(repairs) == 1

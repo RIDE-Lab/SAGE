@@ -6,15 +6,20 @@ child receipt is validated before its witnesses can enter the parent receipt.
 
 import json
 
-from sage.runtime.evidence_coverage import prepare_coverage, validate_coverage
+from sage.runtime.evidence_coverage import (
+    InvalidEvidenceCoverage,
+    prepare_coverage,
+    validate_coverage,
+)
 from sage.runtime.model_errors import ModelRequestRejected
 
 
-def assess_source_groups(request, assess):
+def assess_source_groups(request, assess, repair=None):
     """Try the bound snapshot, bisect only on explicit capacity rejection.
 
-    At most 2N-1 calls for N sources. Transport failures, malformed mappings and
-    single-source overflows propagate; they never become a coverage gap.
+    At most 2N-1 assessment calls for N sources. Each malformed child receipt
+    may be corrected once against that exact child snapshot. Transport failures
+    and invalid corrections propagate; they never become a coverage gap.
     """
     try:
         return assess(request)
@@ -27,7 +32,17 @@ def assess_source_groups(request, assess):
     for sources in (request.sources[:middle], request.sources[middle:]):
         child = prepare_coverage(request.question, request.requirements, sources,
                                  purpose=request.purpose)
-        receipts.append(validate_coverage(child, assess_source_groups(child, assess)))
+        raw = assess_source_groups(child, assess, repair)
+        try:
+            receipt = validate_coverage(child, raw)
+        except InvalidEvidenceCoverage as error:
+            if repair is None or error.code == "invalid_request_or_receipt":
+                raise
+            # Do not repair against the over-capacity parent, relabel a digest,
+            # truncate a source, or restart already accepted model invocations.
+            raw = repair(child, raw, error.code)
+            receipt = validate_coverage(child, raw)
+        receipts.append(receipt)
     merged = {'digest': request.digest, 'items': [
         {'requirement_id': requirement.requirement_id,
          'witnesses': [{'source_id': witness.source_id, 'start_line': witness.start_line,

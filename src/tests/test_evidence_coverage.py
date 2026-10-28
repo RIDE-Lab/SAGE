@@ -171,3 +171,19 @@ def test_coverage_purpose_is_bound_and_cannot_reuse_source_receipt():
         validate_coverage(replace(complete, purpose="source_support"), '{}')
     with pytest.raises(InvalidEvidenceCoverage):
         prepare_coverage(req.question, req.requirements, req.sources, purpose="ignore-gaps")
+
+
+def test_decoder_cannot_select_blank_only_witness_and_preserves_source_bytes():
+    from jsonschema import Draft202012Validator
+    from sage.runtime.evidence_coverage import coverage_response_format
+    source = PlanSource('s', 'Source', '', 'heading\n\nfull body\n\n')
+    req = prepare_coverage('What is reported?', question_requirements('What is reported?'), (source,))
+    validator = Draft202012Validator(coverage_response_format(req)['json_schema']['schema'])
+    def raw(start, end):
+        return {'digest':req.digest, 'items':[{'requirement_id':'question',
+            'witnesses':[{'source_id':'s','start_line':start,'end_line':end}]}]}
+    assert not validator.is_valid(raw(2, 2))
+    assert validator.is_valid(raw(1, 3))
+    receipt = validate_coverage(req, json.dumps(raw(1, 3)))
+    assert receipt.items[0].witnesses[0].quote == 'heading\n\nfull body\n'
+    assert req.sources[0].content == source.content

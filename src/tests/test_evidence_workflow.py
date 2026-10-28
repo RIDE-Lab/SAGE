@@ -427,3 +427,23 @@ def test_research_overview_does_not_run_experiments_without_design_request():
         assert result.experiment_plan is not None
     finally:
         runtime.close()
+
+
+def test_missing_coverage_plans_search_inside_native_flow_and_revalidates_sources():
+    class PlannedPorts(Ports):
+        def plan_retrieval_repair(self, request, assessment):
+            self.calls.append(('query_plan', request.digest))
+            return json.dumps({'digest': request.digest, 'queries': ['B extension composition']})
+    ports = PlannedPorts(missing=True)
+    runtime = EvidenceWorkflowRuntime()
+    events = []
+    try:
+        with ExecutionObserver(events.append).bind():
+            result = runtime.run('A and B?', (SOURCE,), ports, timeout=10, task=AnswerTask('facts'))
+        assert ('supplement', ('A and B?', 'B extension composition')) in ports.calls
+        assert sum(c[0] == 'query_plan' for c in ports.calls) == 1
+        assert any(e.operator_key == 'plan-retrieval-repair' and e.state == 'completed' for e in events)
+        assert result.assessment.missing_ids == ()
+        assert len(result.candidates) == 2
+    finally:
+        runtime.close()

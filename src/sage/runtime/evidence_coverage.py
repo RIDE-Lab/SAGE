@@ -13,9 +13,9 @@ import re
 from dataclasses import dataclass
 
 from sage.runtime.evidence_relevance import question_identifiers
+from sage.runtime.evidence_scope import CONVERSATION_EVIDENCE_RULES
 from sage.runtime.source_answer_plan import PlanSource, prepare_source_plan
 from sage.runtime.source_audit import AnswerValidationRejected
-from sage.runtime.evidence_scope import CONVERSATION_EVIDENCE_RULES
 
 
 class InvalidEvidenceCoverage(AnswerValidationRejected):
@@ -174,14 +174,20 @@ def coverage_response_format(request: CoverageRequest) -> dict:
     # Bind each source ID to its OWN line range. A global maximum admits
     # line 200 for a one-line web snippet whenever another source is longer.
     def witness_schema(source):
-        maximum = len(source.content.splitlines(keepends=True))
+        lines = source.content.splitlines(keepends=True)
+        nonempty = [index for index, line in enumerate(lines, 1) if line.strip()]
+        maximum = len(lines)
         return {"type": "object", "additionalProperties": False,
             "required": ["source_id", "start_line", "end_line"], "properties": {
                 "source_id": {"type": "string", "enum": [source.source_id]},
-                "start_line": {"type": "integer", "minimum": 1, "maximum": maximum},
-                "end_line": {"type": "integer", "minimum": 1, "maximum": maximum}}}
-    witnesses = {"type": "array", "items": {"anyOf": [witness_schema(s) for s in request.sources]}}
-    if not request.sources:
+                "start_line": {"type": "integer", "minimum": 1, "maximum": maximum, "enum": nonempty},
+                "end_line": {"type": "integer", "minimum": 1, "maximum": maximum, "enum": nonempty}}}
+    # Blank-only witnesses are deterministically invalid. Constrain generation
+    # before a call is spent correcting them; retain original line numbering
+    # and every source byte. Missing evidence is still represented by [].
+    usable = [s for s in request.sources if s.content.strip()]
+    witnesses = {"type": "array", "items": {"anyOf": [witness_schema(s) for s in usable]}}
+    if not usable:
         witnesses = {"type": "array", "maxItems": 0, "items": {"type": "object",
             "additionalProperties": False, "properties": {}, "required": []}}
     return {"type": "json_schema", "json_schema": {"name": "evidence_coverage", "strict": True,
