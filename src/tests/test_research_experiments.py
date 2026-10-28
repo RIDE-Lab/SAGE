@@ -43,7 +43,7 @@ def test_runtime_owns_distinct_matched_control_and_falsification_rules():
     assert "区间跨越阈值，结果仍不确定" in performance
     assert "先导实验估计方差" in performance
     assert "两组使用完全相同的故障／事件轨迹" in safety and "两组使用完全相同" in performance
-    assert "不代表项目当前实现或既有实验" in safety
+    assert "可以采用以下对照设置" in safety
     assert "对照度量为正" in performance
     assert "确认两组未改变数值计算路径" in safety
     assert "不能在看到差异后放宽为数值容差" in safety
@@ -155,3 +155,14 @@ def test_binding_rejects_changed_question_and_duplicate_or_stale_receipts():
         validate_experiments(req, json.dumps({**data, "digest": "old"}))
     with pytest.raises(InvalidResearchPlan):
         validate_experiments(req, json.dumps(data).replace('"digest":', '"digest":"duplicate","digest":'))
+
+
+def test_advice_uses_prospective_language_without_internal_audit_labels():
+    req = request()
+    plan = validate_experiments(req, json.dumps(payload(req)))
+    advice = render_experiments(req, plan)
+    assert advice[0].startswith("建议验证这个假设：")
+    assert advice[1].startswith("建议做一次性能对照实验。")
+    assert all("非已验证结论" not in text and "非来源事实" not in text for text in advice)
+    assert "未发现反例只表示本次测试未证伪" in advice[0]
+    assert "若区间跨越阈值，结果仍不确定" in advice[1]

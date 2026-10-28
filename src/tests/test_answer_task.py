@@ -24,3 +24,15 @@ def test_mixed_task_requires_current_directive():
 def test_invalid_task_cannot_activate_work(task):
     with pytest.raises(ValueError):
         task.validate("查一下原文。")
+
+
+def test_direction_request_does_not_authorize_experimental_plan():
+    question = "推理状态管理有哪些值得验证的研究问题？"
+    task = AnswerTask("research", "有哪些值得验证的研究问题").validate(question)
+    assert task.research_requested and not task.experiments_requested
+    task = AnswerTask("research", "设计对照实验", "设计对照实验").validate("请设计对照实验。")
+    assert task.experiments_requested
+    with pytest.raises(ValueError):
+        AnswerTask("research", "值得验证", "设计实验").validate(question)
+    with pytest.raises(ValueError):
+        AnswerTask("facts", None, "设计实验").validate("不要设计实验。")

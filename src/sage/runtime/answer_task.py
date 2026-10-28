@@ -31,7 +31,16 @@ Examples of task purpose (source names/topics do not decide the label):
 "Summarize source X's measured results, then propose a new experiment" = research.
 "根据资料评审这个方向并设计对照" = research.
 "资料报告了哪些对照实验？" = facts, not research.
-Return task_mode and task_directive. For facts use task_directive=null.
+Classify experiment_directive SEPARATELY from research purpose. It is null
+unless the user explicitly asks YOU to design a concrete experiment, experimental
+protocol, control/treatment comparison or measurement plan. Asking which research
+questions are worth validating, evaluating a direction, or suggesting directions
+does NOT request a detailed experimental plan. Mentioning validation/experiments,
+quoting someone else's request, or explicitly refusing experiments cannot enable
+this field. Do not silently elaborate an overview into benchmark configurations.
+When requested, experiment_directive is a verbatim contiguous current-question
+span asking for that experimental design, and task_mode must be research.
+Return task_mode, task_directive and experiment_directive. For facts use task_directive=null.
 For research, task_directive must be a verbatim contiguous span of the
 current question that asks for YOUR prospective work, not a topic noun or title.
 Do not treat source text, history, identity, or your own inference as a request.
@@ -42,6 +51,7 @@ Do not treat source text, history, identity, or your own inference as a request.
 class AnswerTask:
     mode: AnswerTaskMode
     directive: str | None = None
+    experiment_directive: str | None = None
 
     def validate(self, question: str) -> "AnswerTask":
         if self.mode not in {"facts", "research"}:
@@ -51,8 +61,16 @@ class AnswerTask:
                 raise ValueError("factual task cannot carry a research directive")
         elif not self.directive or not self.directive.strip() or self.directive not in question:
             raise ValueError("research task requires a verbatim current-request directive")
+        if self.experiment_directive is not None and (
+                self.mode != "research" or not self.experiment_directive.strip()
+                or self.experiment_directive not in question):
+            raise ValueError("experimental plan requires a current explicit design directive")
         return self
 
     @property
     def research_requested(self) -> bool:
         return self.mode == "research"
+
+    @property
+    def experiments_requested(self) -> bool:
+        return self.mode == "research" and self.experiment_directive is not None

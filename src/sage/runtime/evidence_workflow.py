@@ -51,6 +51,7 @@ class EvidenceWork:
     candidates: tuple[PlanSource, ...]
     candidate_digest: str
     research: bool = False
+    experiments_requested: bool = False
     assessment: CoverageAssessment | None = None
     assessment_failure: str | None = None
     rejected_assessment: str | None = None
@@ -267,7 +268,7 @@ def minimize_evidence(work):
 
 
 def _research_requested(work):
-    return work.research and work.plan is not None and bool(work.plan.source_ids)
+    return work.experiments_requested and work.plan is not None and bool(work.plan.source_ids)
 
 
 @stateless(uri="stateless://sage/evidence/research-requested", namespace="sage")
@@ -303,7 +304,7 @@ def render_evidence_work_blocks(work: EvidenceWork) -> tuple[SourceAnswerBlock, 
         parts = [SourceAnswerBlock("notice", "当前允许检索的来源不足以回答这个问题；这不表示相关事实不存在。")]
     else:
         request = prepare_source_plan(work.request.question, work.request.sources, allow_inferences=work.research)
-        if work.research and work.plan.source_ids:
+        if work.experiments_requested and work.plan.source_ids:
             if work.experiment_plan is None:
                 raise InvalidEvidenceCoverage("research answer requires a structured experiment plan")
             experiments = prepare_experiments(request, work.plan.source_ids)
@@ -387,7 +388,8 @@ class EvidenceWorkflowRuntime:
         token = _ports.set(ports)
         try:
             outputs = self._endpoint.call(EvidenceWork(request, candidates=sources,
-                candidate_digest=request.digest, research=research), timeout=timeout)
+                candidate_digest=request.digest, research=research,
+                experiments_requested=research if task is None else task.experiments_requested), timeout=timeout)
         finally:
             _ports.reset(token)
         if len(outputs) != 1:

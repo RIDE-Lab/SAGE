@@ -240,7 +240,7 @@ def render_experiments(request: ExperimentRequest, plan: ExperimentPlan) -> tupl
         schedule = "；".join(f"操作步 {event.at_step}：{FAULT_KINDS[event.kind]}（目标 {event.target}）"
             for event in experiment.fault_events) or "仅重放相同的无故障请求轨迹"
         conditions = experiment.shared_conditions
-        common = ("以下机制设置是本回答提出的候选实现方案，不代表项目当前实现或既有实验。"
+        common = ("可以采用以下对照设置："
             f"待测机制：{experiment.mechanism}。对照组设置：{experiment.control_value}；"
             f"处理组设置：{experiment.treatment_value}。两组仅改变上述机制设置；共享条件："
             + f"模型：{conditions.model}；硬件：{conditions.hardware}；工作负载：{conditions.workload}；"
@@ -250,7 +250,7 @@ def render_experiments(request: ExperimentRequest, plan: ExperimentPlan) -> tupl
             + f"两组使用完全相同的故障／事件轨迹：{schedule}。操作步按同一预先记录的重放序列计数，"
               "不是两组各自的墙钟时间。该事件清单不保证故障注入器已经实现；需先验证可重放性。")
         if experiment.kind == "invariant":
-            rendered.append("建议实验（不变量；非已验证结论）。假设：在声明的输入与故障边界内始终满足："
+            rendered.append("建议验证这个假设：在声明的输入与故障边界内始终满足："
                 + experiment.invariant + "。" + common
                 + "测量：逐次核对不变量并保留可重放轨迹。证伪观察：出现一次可复现的不变量违反，"
                 "即可证伪这个假设；不需要统计显著性。未发现反例只表示本次测试未证伪，"
@@ -260,7 +260,7 @@ def render_experiments(request: ExperimentRequest, plan: ExperimentPlan) -> tupl
                 "不能在看到差异后放宽为数值容差；若确定性前提不成立，应重新声明假设与验收口径后再做实验。")
         else:
             definition = "处理组指标/对照组指标 − 1" if experiment.direction=="higher" else "1 − 处理组指标/对照组指标"
-            rendered.append("建议实验（性能；非已验证结论）。" + common
+            rendered.append("建议做一次性能对照实验。" + common
                 + f"指标：{experiment.metric}（{'越高越好' if experiment.direction=='higher' else '越低越好'}）。"
                 f"假设：在对照度量为正、指标口径一致的前提下，相对收益 g={definition} 至少达到预声明阈值 {experiment.threshold_gain}"
                 f"（约 {100*experiment.threshold_gain:g}%）。采样单位：独立的配对工作负载重放；"

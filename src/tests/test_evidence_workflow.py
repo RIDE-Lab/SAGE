@@ -410,3 +410,20 @@ def test_invalid_smaller_source_assessment_is_not_silently_accepted():
             runtime.run('What do A and B do?', (SOURCE,SUPPLEMENT), BadFocus(), timeout=5)
     finally:
         runtime.close()
+
+
+def test_research_overview_does_not_run_experiments_without_design_request():
+    runtime, ports, events = EvidenceWorkflowRuntime(), Ports(), []
+    try:
+        with ExecutionObserver(events.append).bind():
+            result = runtime.run("A有哪些值得验证的研究问题？", (SOURCE,), ports, timeout=5,
+                task=AnswerTask("research", "有哪些值得验证的研究问题"))
+        assert result.research and not result.experiments_requested
+        assert result.experiment_plan is None and result.plan.inferences == ()
+        assert not any(e.operator_key=="plan-experiments" and e.state=="started" for e in events)
+        assert "非来源事实" not in result.answer
+        result = runtime.run("为 A 设计对照实验", (SOURCE,), Ports(), timeout=5,
+            task=AnswerTask("research", "设计对照实验", "设计对照实验"))
+        assert result.experiment_plan is not None
+    finally:
+        runtime.close()

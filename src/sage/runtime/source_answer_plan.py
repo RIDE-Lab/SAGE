@@ -188,7 +188,7 @@ def render_source_plan_blocks(
             parts.append(SourceAnswerBlock("source_link", f"[完整来源]({target})", source_id))
     if plan.inferences:
         # Quote every line, so model Markdown cannot create an unlabelled factual section.
-        parts.append(SourceAnswerBlock("inference", "## 推论／建议（非来源事实）\n\n" + "\n\n".join(
+        parts.append(SourceAnswerBlock("inference", "\n\n".join(
             "\n".join("> " + line for line in item.splitlines()) for item in plan.inferences
         )))
     return tuple(parts)

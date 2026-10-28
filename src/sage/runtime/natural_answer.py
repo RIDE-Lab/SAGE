@@ -40,8 +40,10 @@ all failures without silently dropping requested parts or copying source pages.
 Return ONLY JSON {"digest": supplied digest, "paragraphs": [complete paragraph,
 next paragraph, ...]}. Each numbered step MUST be a separate array item, not
 inline in the introduction. Do not introduce unrequested performance tangents.
-For prospective research tasks, explain grounded premises only; a separate
-structured experiment section supplies the proposals.
+For research-direction questions, explain the relevant source-grounded open
+questions and their motivation. Do not promise an extra experiment section or
+append experimental configurations unless the user explicitly requests design.
+Never present a proposed hypothesis or unresolved question as a proven result.
 """
 
 NATURAL_AUDIT_PROMPT = AUDIT_SYSTEM_PROMPT + """

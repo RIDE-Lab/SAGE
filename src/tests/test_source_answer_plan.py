@@ -61,7 +61,7 @@ def test_multisource_blocks_keep_distinct_bases_and_exact_canonical_answer():
         "[完整来源](https://b.example/other/readme.md)",
         "## 来源原文 2\n\n" + first,
         "[完整来源](https://a.example/docs/readme.md)",
-        "## 推论／建议（非来源事实）\n\n> Proposed experiment.\n> ## not a factual heading",
+        "> Proposed experiment.\n> ## not a factual heading",
     ])
     assert render_source_plan(req, plan) == expected
     assert "\n\n".join(b.markdown for b in blocks).strip() == expected
@@ -134,7 +134,7 @@ def test_inferences_explicit_and_separate():
     data = json.loads(response(req))
     data["inferences"] = ["建议阅读报告。\n## 不应成为事实标题"]
     answer = render_source_plan(req, validate_source_plan(req, json.dumps(data)))
-    assert "推论／建议（非来源事实）" in answer
+    assert "推论／建议（非来源事实）" not in answer
     assert "> ## 不应成为事实标题" in answer
 
 
