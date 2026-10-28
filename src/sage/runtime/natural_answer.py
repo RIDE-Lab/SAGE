@@ -52,6 +52,16 @@ append experimental configurations unless the user explicitly requests design.
 Never present a proposed hypothesis or unresolved question as a proven result.
 """
 
+NATURAL_CORRECTION_PROMPT = NATURAL_ANSWER_PROMPT + """
+This call is a CORRECTION, not a new first draft. The previous answer failed
+independent verification. failed_units contains the exact unsupported sentences.
+For each, replace it with a narrower statement entailed by the supplied sources,
+or omit the unsupported assertion if it is unnecessary to answer the question.
+Do not reproduce those rejected sentences unchanged. Preserve relevant supported
+material and complete missing requested parts. Return the entire corrected answer,
+not commentary about edits. The same strict source audit runs again afterward.
+"""
+
 NATURAL_AUDIT_PROMPT = AUDIT_SYSTEM_PROMPT + """
 Before assigning supported, actively try to construct a counterexample world in
 which every supplied source sentence is true but the answer unit is false.
@@ -71,6 +81,7 @@ supported if the linked report itself is not supplied. Preserve this distinction
 """
 
 NATURAL_ANSWER_PROMPT += CONVERSATION_EVIDENCE_RULES
+NATURAL_CORRECTION_PROMPT += CONVERSATION_EVIDENCE_RULES
 
 @dataclass(frozen=True)
 class NaturalAnswerRequest:

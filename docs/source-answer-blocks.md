@@ -39,3 +39,5 @@ that a proposed number, deployment or experiment is true. The same source review
 and bounded correction apply, with no fallback publishing of rejected text.
 
 Natural-answer repair payloads resolve verifier sentence IDs to exact rejected sentence text using the same tokenizer as source audits. Paragraph positions are never used as sentence IDs; invalid feedback is rejected. A corrected draft still requires fresh source and completeness receipts.
+
+Coverage receipts bind their purpose: source support versus answer completeness. A responsive, source-audited limitation can satisfy completeness without inventing a positive fact; it does not establish missing source evidence. Correction uses a dedicated repair instruction with the exact failed sentences and the same strict final checks.

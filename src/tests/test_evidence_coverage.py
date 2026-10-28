@@ -160,3 +160,14 @@ def test_decoder_schema_binds_line_numbers_to_each_source():
 def test_diagnostics_never_forward_unrecognized_model_or_exception_text():
     assert InvalidEvidenceCoverage('witness range not in authorized source').code == 'witness_out_of_range'
     assert InvalidEvidenceCoverage('secret-or-source-body').code == 'invalid_request_or_receipt'
+
+
+def test_coverage_purpose_is_bound_and_cannot_reuse_source_receipt():
+    req = request()
+    complete = prepare_coverage(req.question, req.requirements, req.sources, purpose="answer_completeness")
+    assert req.digest != complete.digest
+    assert json.loads(complete.payload)["purpose"] == "answer_completeness"
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(replace(complete, purpose="source_support"), '{}')
+    with pytest.raises(InvalidEvidenceCoverage):
+        prepare_coverage(req.question, req.requirements, req.sources, purpose="ignore-gaps")

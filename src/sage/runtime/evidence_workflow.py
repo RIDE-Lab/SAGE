@@ -195,7 +195,7 @@ def _audit_request(work, answer):
 
 def _answer_coverage_request(work, answer):
     return prepare_coverage(work.request.question, work.request.requirements,
-        (PlanSource("answer", "Answer", "", answer),))
+        (PlanSource("answer", "Answer", "", answer),), purpose="answer_completeness")
 
 
 def _review_failures(work, receipt):

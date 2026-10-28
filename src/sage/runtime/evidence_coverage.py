@@ -53,6 +53,7 @@ class CoverageRequest:
     sources: tuple[PlanSource, ...]
     digest: str
     payload: str
+    purpose: str = "source_support"
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,16 @@ it does not display measurements does not show that measurements were never made
 Do not mark prospective research suggestions missing merely because they are not
 established source facts; assess their source-dependent premises instead. This
 is evidence mapping, not independent verification that a source is true.
+The purpose field is assigned by the runtime:
+- source_support: determine what supplied sources establish, not whether a model
+  could give a plausible response. Empty witnesses honestly represent gaps.
+- answer_completeness: the source is the drafted answer. Determine whether it
+  responds to every requested part. An explicit, relevant limitation or correction
+  of a false premise (e.g. the referenced section is absent from the prior answer)
+  can address that part; an unrelated refusal, mere topic mention or silence cannot.
+  Do not require an affirmative factual answer where it says evidence is missing.
+  This is only responsiveness; a SEPARATE source audit must still validate every
+  statement including that limitation against the original authorized sources.
 """
 
 
@@ -126,7 +137,10 @@ def question_requirements(question: str) -> tuple[EvidenceRequirement, ...]:
 
 def prepare_coverage(
     question: str, requirements: tuple[EvidenceRequirement, ...], sources: tuple[PlanSource, ...],
+    *, purpose: str = "source_support",
 ) -> CoverageRequest:
+    if purpose not in {"source_support", "answer_completeness"}:
+        raise InvalidEvidenceCoverage("invalid coverage purpose")
     # Reuse strict source validation without altering content or URLs.
     if sources:
         prepare_source_plan(question, sources)
@@ -145,7 +159,7 @@ def prepare_coverage(
         cursor = item.end
     if cursor != len(question):
         raise InvalidEvidenceCoverage("uncovered question suffix")
-    body = {"version": 2, "question": question,
+    body = {"version": 2, "question": question, "purpose": purpose,
             "requirements": [{**vars(item), "text": question[item.start:item.end]} for item in requirements],
             "sources": [{"source_id": source.source_id, "title": source.title, "url": source.url, "kind": source.kind,
                          "lines": [{"line": index, "text": text}
@@ -153,7 +167,7 @@ def prepare_coverage(
                         for source in sources]}
     digest = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     body["digest"] = digest
-    return CoverageRequest(question, requirements, sources, digest, json.dumps(body, ensure_ascii=False))
+    return CoverageRequest(question, requirements, sources, digest, json.dumps(body, ensure_ascii=False), purpose)
 
 
 def coverage_response_format(request: CoverageRequest) -> dict:
@@ -192,7 +206,7 @@ def _unique(pairs):
 
 
 def validate_coverage(request: CoverageRequest, response: str) -> CoverageAssessment:
-    fresh = prepare_coverage(request.question, request.requirements, request.sources)
+    fresh = prepare_coverage(request.question, request.requirements, request.sources, purpose=request.purpose)
     if request.digest != fresh.digest or request.payload != fresh.payload:
         raise InvalidEvidenceCoverage("coverage request content changed")
     try:
