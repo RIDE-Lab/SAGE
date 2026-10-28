@@ -40,6 +40,7 @@ from sage.runtime.natural_answer import (
     NaturalAnswerReceipt, prepare_natural_answer, validate_natural_answer, audit_failures,
 )
 from sage.runtime.source_audit import prepare_source_audit, SourceAuditRejected
+from sage.runtime.coverage_partition import assess_source_groups
 
 _ports = ContextVar("sage_evidence_workflow_ports")
 
@@ -93,7 +94,7 @@ def assess(work):
         assessment = CoverageAssessment(work.request.digest, tuple(
             RequirementCoverage(r.requirement_id, ()) for r in work.request.requirements))
     else:
-        raw = _ports.get().assess(work.request)
+        raw = assess_source_groups(work.request, _ports.get().assess)
         try:
             assessment = validate_coverage(work.request, raw)
         except InvalidEvidenceCoverage as exc:
