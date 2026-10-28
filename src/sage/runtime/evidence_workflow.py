@@ -76,7 +76,8 @@ def _selected_request(work):
     indices = subject_candidate_indices(question_identifiers(work.request.question), tuple(
         source.title + "\n" + source.content for source in work.candidates))
     return prepare_coverage(work.request.question, work.request.requirements,
-        tuple(work.candidates[index] for index in indices))
+        tuple(source for index, source in enumerate(work.candidates)
+              if index in indices or source.kind == "conversation"))
 
 
 @stateless(uri="stateless://sage/evidence/select", namespace="sage")
@@ -188,7 +189,8 @@ def _natural_request(work):
 def _audit_request(work, answer):
     used = set(work.plan.source_ids)
     return prepare_source_audit(work.request.question, answer,
-        {s.source_id: s.content for s in work.request.sources if s.source_id in used})
+        {s.source_id: s.content for s in work.request.sources if s.source_id in used},
+        source_kinds={s.source_id: s.kind for s in work.request.sources if s.source_id in used})
 
 
 def _answer_coverage_request(work, answer):

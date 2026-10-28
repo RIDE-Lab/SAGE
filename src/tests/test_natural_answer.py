@@ -89,3 +89,27 @@ def test_audit_schema_binds_each_sources_own_line_ids():
     schema=audit_response_format(request)['json_schema']['schema']
     data={'digest':request.digest,'units':[{'id':0,'verdict':'supported','evidence':[{'source_id':'short','line_ids':[50]}]}]}
     with pytest.raises(ValidationError):validate(data,schema)
+
+
+def test_conversation_evidence_scope_is_bound_through_workflow_and_review():
+    from sage.runtime.evidence_coverage import prepare_coverage, question_requirements
+    from sage.runtime.evidence_workflow import EvidenceWork, _selected_request, _audit_request, _natural_request
+    from sage.runtime.source_answer_plan import SourceAnswerPlan
+    dialogue = PlanSource("dialogue", "Prior turn", "", "Assistant: proposed 30%, not a measurement", kind="conversation")
+    document = PlanSource("doc", "ExampleProject", "", "ExampleProject has no result here.")
+    question = "What did the previous ExampleProject answer propose?"
+    req = prepare_coverage(question, question_requirements(question), (document, dialogue))
+    work = EvidenceWork(req, (document, dialogue), req.digest)
+    selected = replace(work, request=_selected_request(work))
+    assert dialogue in selected.request.sources  # Not discarded by subject-name filtering.
+    work = replace(selected, plan=SourceAnswerPlan("unused", ("dialogue",), ()))
+    draft = _natural_request(work)
+    audit = _audit_request(work, "The previous answer proposed 30%, not a measured result.")
+    assert json.loads(draft.payload)["sources"][0]["kind"] == "conversation"
+    assert json.loads(audit.payload)["sources"][0]["kind"] == "conversation"
+    untyped = prepare_source_audit(question, "The previous answer proposed 30%, not a measured result.", {"dialogue": dialogue.content})
+    assert untyped.digest != audit.digest
+    changed = replace(dialogue, kind="document")
+    assert prepare_coverage(question, req.requirements, (document, changed)).digest != req.digest
+    with pytest.raises(ValueError):
+        prepare_source_audit(question, "Answer", {"dialogue":dialogue.content}, source_kinds={"missing":"conversation"})

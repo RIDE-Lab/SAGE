@@ -62,6 +62,7 @@ class PlanSource:
     title: str
     url: str
     content: str
+    kind: Literal["document", "conversation"] = "document"
 
 
 @dataclass(frozen=True)
@@ -86,9 +87,10 @@ def prepare_source_plan(
         raise InvalidSourcePlan("question and authorized sources required")
     seen = set()
     for source in sources:
-        if any(not isinstance(value, str) for value in (
+        if (any(not isinstance(value, str) for value in (
             source.source_id, source.title, source.url, source.content,
-        )) or not source.content.strip() or not source.source_id or source.source_id in seen:
+        )) or not source.content.strip() or not source.source_id or source.source_id in seen
+                or source.kind not in {"document", "conversation"}):
             raise InvalidSourcePlan("invalid or duplicate source")
         seen.add(source.source_id)
         if source.url:

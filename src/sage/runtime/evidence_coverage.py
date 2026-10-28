@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from sage.runtime.evidence_relevance import question_identifiers
 from sage.runtime.source_answer_plan import PlanSource, prepare_source_plan
 from sage.runtime.source_audit import AnswerValidationRejected
+from sage.runtime.evidence_scope import CONVERSATION_EVIDENCE_RULES
 
 
 class InvalidEvidenceCoverage(AnswerValidationRejected):
@@ -96,6 +97,8 @@ is evidence mapping, not independent verification that a source is true.
 """
 
 
+COVERAGE_SYSTEM_PROMPT += CONVERSATION_EVIDENCE_RULES
+
 def question_requirements(question: str) -> tuple[EvidenceRequirement, ...]:
     """Lossless syntactic units, not a claim of semantic decomposition.
 
@@ -144,7 +147,7 @@ def prepare_coverage(
         raise InvalidEvidenceCoverage("uncovered question suffix")
     body = {"version": 2, "question": question,
             "requirements": [{**vars(item), "text": question[item.start:item.end]} for item in requirements],
-            "sources": [{"source_id": source.source_id, "title": source.title, "url": source.url,
+            "sources": [{"source_id": source.source_id, "title": source.title, "url": source.url, "kind": source.kind,
                          "lines": [{"line": index, "text": text}
                                    for index, text in enumerate(source.content.splitlines(keepends=True), 1)]}
                         for source in sources]}

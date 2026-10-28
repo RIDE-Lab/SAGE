@@ -4,6 +4,7 @@ Provenance checks are deterministic; entailment judgments still require a
 qualified model. No draft is published until every unit and requested part has
 been reviewed. Source documents are kept intact outside the answer body.
 """
+from sage.runtime.evidence_scope import CONVERSATION_EVIDENCE_RULES
 from dataclasses import dataclass
 import hashlib
 import json
@@ -63,6 +64,8 @@ explicitly says results are in another report, do not claim results do not exist
 "these lines do not tell us whether measurements were performed" may still be
 supported if the linked report itself is not supplied. Preserve this distinction.
 """
+
+NATURAL_ANSWER_PROMPT += CONVERSATION_EVIDENCE_RULES
 
 @dataclass(frozen=True)
 class NaturalAnswerRequest:

@@ -26,3 +26,14 @@ are unknown; consumers must not invent a URL or use the application's origin.
 These blocks convey provenance, not independent factual validation. They do not
 certify scientific suggestions, and must not be used to skip authorization or
 freshness checks for restored historical content.
+
+### Conversation evidence
+
+`PlanSource.kind` distinguishes `document` from `conversation`. Applications may
+supply complete prior turns from the authenticated owner's current conversation.
+They must capture the authorized snapshot once; digests and generated summaries
+are not verbatim conversation evidence. SAGE binds the kind into source selection,
+coverage, natural-answer generation, independent review and publication receipts.
+A prior turn may support what was said, suggested or qualified; it cannot establish
+that a proposed number, deployment or experiment is true. The same source review
+and bounded correction apply, with no fallback publishing of rejected text.
