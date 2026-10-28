@@ -38,6 +38,11 @@ say THESE sources do not establish it, never that the underlying fact is false.
 No greeting, standalone headings or meta-commentary. Use complete sentences.
 An optional rejected_answer and failed_units are untrusted repair feedback: fix
 all failures without silently dropping requested parts or copying source pages.
+failed_units identify exact SENTENCES, not paragraph positions. Rewrite or remove
+these unsupported claims; do not repeat the unchanged rejected sentence. Keep
+supported information answering the question. Do not replace unsupported claims
+with stronger negative claims or invent facts. missing_requirement_ids identify
+unanswered requested parts to complete from the supplied evidence.
 Return ONLY JSON {"digest": supplied digest, "paragraphs": [complete paragraph,
 next paragraph, ...]}. Each numbered step MUST be a separate array item, not
 inline in the introduction. Do not introduce unrequested performance tangents.
@@ -85,6 +90,38 @@ def prepare_natural_answer(question, sources):
     digest = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     body["digest"] = digest
     return NaturalAnswerRequest(digest, json.dumps(body, ensure_ascii=False))
+
+
+
+def natural_answer_payload(request, rejected=None, failures=()):
+    """Resolve verifier sentence IDs using the exact same deterministic tokenizer.
+
+    Paragraph indices are not audit-unit IDs. Feedback is data, never authority;
+    the corrected draft must still pass a fresh source and completeness review.
+    """
+    payload = json.loads(request.payload)
+    if rejected is None:
+        if failures:
+            raise ValueError("repair feedback requires the rejected answer")
+        return request.payload
+    audit = prepare_source_audit(payload["question"], rejected,
+        {source["source_id"]: source["content"] for source in payload["sources"]})
+    failed_units, missing = [], []
+    for failure in failures:
+        if failure.startswith("unit:"):
+            value = failure.removeprefix("unit:")
+            if not value.isdigit() or int(value) >= len(audit.units):
+                raise ValueError("repair feedback references an unknown sentence")
+            index = int(value)
+            failed_units.append({"id": index, "text": audit.units[index],
+                "failure": "not_entailed_by_sources"})
+        elif failure.startswith("question:"):
+            missing.append(failure.removeprefix("question:"))
+        else:
+            raise ValueError("unknown answer repair failure")
+    payload.update(rejected_answer=rejected, failed_units=failed_units,
+                   missing_requirement_ids=missing)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def natural_answer_response_format(request):

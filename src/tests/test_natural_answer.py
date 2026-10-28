@@ -113,3 +113,18 @@ def test_conversation_evidence_scope_is_bound_through_workflow_and_review():
     assert prepare_coverage(question, req.requirements, (document, changed)).digest != req.digest
     with pytest.raises(ValueError):
         prepare_source_audit(question, "Answer", {"dialogue":dialogue.content}, source_kinds={"missing":"conversation"})
+
+
+def test_repair_feedback_resolves_sentence_ids_not_paragraph_indices():
+    from sage.runtime.natural_answer import natural_answer_payload
+    request = prepare_natural_answer("What is known?", (SOURCE,))
+    rejected = "项目仍在进行。作者从未测量。\n\n来源没有展示数据。"
+    payload = json.loads(natural_answer_payload(request, rejected, ("unit:1", "question:question")))
+    assert payload["failed_units"] == [{"id": 1, "text": "作者从未测量。", "failure": "not_entailed_by_sources"}]
+    assert payload["missing_requirement_ids"] == ["question"]
+    assert payload["digest"] == request.digest
+    assert payload["sources"] == json.loads(request.payload)["sources"]
+    assert natural_answer_payload(request) == request.payload
+    for failures in (("unit:9",), ("unit:-1",), ("bogus",)):
+        with pytest.raises(ValueError):
+            natural_answer_payload(request, rejected, failures)

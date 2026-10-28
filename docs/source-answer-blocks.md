@@ -37,3 +37,5 @@ coverage, natural-answer generation, independent review and publication receipts
 A prior turn may support what was said, suggested or qualified; it cannot establish
 that a proposed number, deployment or experiment is true. The same source review
 and bounded correction apply, with no fallback publishing of rejected text.
+
+Natural-answer repair payloads resolve verifier sentence IDs to exact rejected sentence text using the same tokenizer as source audits. Paragraph positions are never used as sentence IDs; invalid feedback is rejected. A corrected draft still requires fresh source and completeness receipts.
