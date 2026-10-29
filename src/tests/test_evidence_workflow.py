@@ -374,33 +374,22 @@ def test_empty_witnesses_cannot_publish_an_unrelated_document():
         runtime.close()
 
 
-@pytest.mark.parametrize('complete', [True, False])
-def test_smaller_source_must_be_revalidated_for_the_whole_question(complete):
-    short = replace(SOURCE, source_id='short', content='A owns state. B composes extensions.')
-    long = replace(SUPPLEMENT, source_id='long', content='A owns state. B composes extensions.\n' + 'Other matters.\n'*100)
-    class FocusPorts(Ports):
-        def assess(self, request):
-            if len(request.sources)==1 and request.sources[0].source_id != "answer" and not complete:
-                return json.dumps({'digest':request.digest,'items':[{'requirement_id':r.requirement_id,'witnesses':[]} for r in request.requirements]})
-            return super().assess(request)
+def test_complementary_evidence_is_not_reduced_to_the_shortest_source():
+    short = replace(SOURCE, source_id='short', content='Migration helps if transfer costs less than rebuilding.')
+    long = replace(SUPPLEMENT, source_id='long', content='Recomputation may be cheaper if reuse is unlikely. Include contention and waiting.')
     runtime, events = EvidenceWorkflowRuntime(), []
     try:
         with ExecutionObserver(events.append).bind():
-            result = runtime.run('What do A and B do?', (long,short), FocusPorts(), timeout=5)
+            result = runtime.run('When is each alternative cheaper?', (long,short), Ports(), timeout=5)
         assert result.request.sources == (long,short)
-        assert result.assessment.missing_ids == ()
-        assert result.plan.source_ids == (('short',) if complete else ('long','short'))
-        assert (long.content in result.answer) is not complete
-        assert short.content in result.answer
-        assert any(e.operator_key=='minimize-evidence' and e.state=='completed' for e in events)
-        if complete:
-            with pytest.raises(InvalidEvidenceCoverage):
-                render_evidence_work(replace(result, focused_assessment=replace(result.focused_assessment,digest='stale')))
+        assert result.plan.source_ids == ('long','short')
+        assert long.content in result.answer and short.content in result.answer
+        assert not any(e.operator_key=='minimize-evidence' for e in events)
     finally:
         runtime.close()
 
 
-def test_invalid_smaller_source_assessment_is_not_silently_accepted():
+def test_invalid_answer_completeness_assessment_is_not_silently_accepted():
     class BadFocus(Ports):
         def assess(self, request):
             return 'invalid' if len(request.sources)==1 else super().assess(request)

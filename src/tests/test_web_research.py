@@ -124,3 +124,15 @@ def test_stable_explanation_can_omit_unused_query_but_never_search_none():
     for mode in ('auto','always'):
         assert not decide_web_research(question='Explain a stable concept.',mode=mode,
             identity='guest',intent=intent).allowed
+
+
+def test_coverage_gap_can_search_stable_public_subject_without_overriding_boundaries():
+    args=dict(question='Explain KV Cache.', mode='auto', identity='guest',
+              intent=WebIntent(need='none',disclosure='public',query='KV Cache'))
+    assert not decide_web_research(**args).allowed
+    assert decide_web_research(**args,evidence_gap=True).allowed
+    for override in ({'mode':'never'}, {'source_restricted':True}, {'contains_private_context':True},
+                     {'active':False}, {'intent':WebIntent(need='none',disclosure='private')},
+                     {'intent':WebIntent(need='forbidden',disclosure='public',query='KV Cache')},
+                     {'intent':WebIntent(need='none',disclosure='public',query=None)}):
+        assert not decide_web_research(**{**args,**override},evidence_gap=True).allowed

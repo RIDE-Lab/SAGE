@@ -43,8 +43,16 @@ explanation, local Wiki/lab facts, writing, scheduling or self-contained work).
 disclosure: public for a clearly public subject; private for internal lab,
 personal, unpublished, confidential or credential-bearing content; unknown for
 ambiguous references such as 'it', 'that project', or unresolved pronouns.
-query: a nonempty VERBATIM CONTIGUOUS public-subject span of current_question,
+Disclosure is INDEPENDENT of whether web search is initially needed. General
+scientific concepts, experimental methods and technical comparisons without
+personal/internal qualifiers are public, even when need=none. Unknown means an
+unresolved private/public referent, NOT that the answer or source is unknown.
+query: a nonempty VERBATIM CONTIGUOUS span of current_question preserving both
+the public subject AND the requested relation/question,
 without personal/private context, when disclosure=public, otherwise null.
+Provide this public span even for need=none, so the runtime can supplement
+public evidence if local coverage is later found insufficient. Do not infer
+private context from the user's identity or from history.
 local_only_span: a verbatim current-question span explicitly limiting evidence
 to Wiki/private/local sources (e.g. '根据公开 Wiki' or 'only our private KB'),
 otherwise null. A preference to retrieve Wiki is NOT a prohibition on web.
@@ -140,6 +148,7 @@ def decide_web_research(
     source_restricted: bool = False,
     active: bool = True,
     contains_private_context: bool = False,
+    evidence_gap: bool = False,
 ) -> WebDecision:
     if mode not in {"auto", "never", "always"}:
         raise ValueError("invalid web mode")
@@ -176,7 +185,7 @@ def decide_web_research(
         question,
     ):
         return denied("当前问题包含疑似敏感标识，不发送到外部搜索。")
-    if mode == "auto" and intent.need == "none":
+    if mode == "auto" and intent.need == "none" and not evidence_gap:
         return denied("本轮无需最新外部信息，优先使用授权来源或直接回答。")
     return WebDecision(
         mode,
@@ -190,7 +199,7 @@ def decide_web_research(
 
 
 def execute_web_research(
-    decision: WebDecision, search: Callable, observe: Callable, *, timeout_seconds=8
+    decision: WebDecision, search: Callable, observe: Callable, *, timeout_seconds=8, review: Callable | None = None, public_context: str = "", search_timeout_seconds: float = 8
 ):
     """Observe only actual provider execution, not an optimistic workflow graph.
 
@@ -203,9 +212,41 @@ def execute_web_research(
     observe("running", "正在搜索公开网页。", None)
     try:
         with web_research_budget(timeout_seconds) as deadline:
-            hits = read_tool_executor.call(
-                lambda: list(search(decision.query)), timeout=max(0, deadline - monotonic())
-            )
+            from sage.runtime.web_search_quality import prepare_search_review, validate_search_review
+            query = decision.query
+            hits = []
+            attempted_queries = []
+            provider_failed = False
+            if review is not None:
+                observe("running", "正在组织公开搜索词。", None)
+                plan = prepare_search_review(decision.query, [], public_context=public_context)
+                raw = read_tool_executor.call(lambda r=plan: review(r), timeout=max(0, deadline-monotonic()))
+                _, rewritten = validate_search_review(plan, raw)
+                query = rewritten or query
+            for attempt in range(2):
+                attempted_queries.append(query)
+                try:
+                    candidates = read_tool_executor.call(
+                        lambda q=query: list(search(q)), timeout=max(0, min(search_timeout_seconds, deadline - monotonic())))
+                    provider_failed = False
+                except Exception:
+                    if review is None:
+                        raise
+                    candidates = []
+                    provider_failed = True
+                    observe("running", "搜索入口未返回结果，正在调整公开搜索词。", None)
+                if review is None:
+                    hits = candidates
+                    break
+                observe("running", "正在检查网页是否切题。", None)
+                request = prepare_search_review(decision.query, candidates, attempted_queries=attempted_queries, public_context=public_context)
+                raw = read_tool_executor.call(lambda r=request: review(r), timeout=max(0, deadline-monotonic()))
+                selected, retry = validate_search_review(request, raw)
+                hits = [candidates[i] for i in selected]
+                if hits or not retry or retry in attempted_queries or attempt:
+                    break
+                query = retry
+                observe("running", "候选网页不够相关，正在调整搜索词。", None)
             if monotonic() > deadline:
                 raise TimeoutError("web research deadline exceeded")
     except ReadToolDeadlineExceeded:
@@ -213,6 +254,9 @@ def execute_web_research(
         return []
     except Exception:
         observe("failed", "网页搜索失败或超时；不能声称已取得联网依据。", None)
+        return []
+    if not hits and provider_failed:
+        observe("failed", "搜索入口未返回可用结果；本轮没有取得联网依据。", None)
         return []
     checked_at = datetime.now(UTC).isoformat()
     observe(
