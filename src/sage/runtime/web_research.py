@@ -199,7 +199,8 @@ def decide_web_research(
 
 
 def execute_web_research(
-    decision: WebDecision, search: Callable, observe: Callable, *, timeout_seconds=8, review: Callable | None = None, public_context: str = "", search_timeout_seconds: float = 8
+    decision: WebDecision, search: Callable, observe: Callable, *, timeout_seconds=8, review: Callable | None = None, public_context: str = "", search_timeout_seconds: float = 8,
+    hydrate: Callable | None = None,
 ):
     """Observe only actual provider execution, not an optimistic workflow graph.
 
@@ -258,6 +259,20 @@ def execute_web_research(
     if not hits and provider_failed:
         observe("failed", "搜索入口未返回可用结果；本轮没有取得联网依据。", None)
         return []
+    if hits and hydrate is not None and monotonic() < deadline:
+        observe("running", "正在读取入选网页正文。", None)
+        # Discovery is already valid. A slow extraction must not erase accepted
+        # excerpts or let a late worker replace this round's selected sources.
+        try:
+            with web_research_budget(max(0, deadline - monotonic())):
+                selected = tuple(hits)
+                enriched = read_tool_executor.call(lambda h=selected: list(hydrate(h)),
+                    timeout=max(0, min(search_timeout_seconds, deadline - monotonic())))
+            if [h.url for h in enriched] != [h.url for h in selected]:
+                raise ValueError("extraction changed selected source identities")
+            hits = enriched
+        except Exception:
+            observe("running", "部分网页正文暂未取得，保留已取得的来源摘录。", None)
     checked_at = datetime.now(UTC).isoformat()
     observe(
         "completed" if hits else "empty",

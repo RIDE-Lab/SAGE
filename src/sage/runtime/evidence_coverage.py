@@ -88,6 +88,10 @@ digest and one item per requirement:
 Select the paragraph IDs allowed by the response schema from the complete
 numbered sources; use multiple witnesses for evidence across paragraphs. Never
 rewrite or quote source text in your response. Line numbers are local to each source.
+Select a sufficient set of supporting paragraphs, not every topically related
+paragraph. Exclude duplicate claims, navigation and bibliographies. Keep the
+complementary paragraphs needed for both alternatives and their conditions;
+economy must not discard an aspect of the question or a qualification.
 Choose only lines that provide evidence, retaining qualifications. Match subject, predicate,
 qualification and requested comparison; mentioning the subject alone is not enough.
 Use multiple witnesses when a requirement asks for multiple subjects or aspects.
