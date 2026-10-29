@@ -137,24 +137,25 @@ def test_request_cannot_be_rebound_while_reusing_the_digest(field):
         validate_coverage(replace(req, **{field: replacements[field]}), response(req))
 
 
-def test_decoder_schema_binds_line_numbers_to_each_source():
+def test_decoder_schema_binds_selections_to_original_source_paragraphs():
     from jsonschema import Draft202012Validator
+    from sage.runtime.evidence_coverage import decode_coverage_selection
     req = prepare_coverage('Explain the pipeline?', question_requirements('Explain the pipeline?'), (
         PlanSource('wiki', 'Pipeline', 'https://example.org/wiki', 'prefill\ndecode\nverification'),
         PlanSource('web', 'Snippet', 'https://example.org/web', 'One line only.'),
     ))
-    schema = coverage_response_format(req)['json_schema']['schema']
-    validator = Draft202012Validator(schema)
-    def mapping(source, end):
-        return {'digest': req.digest, 'items': [{'requirement_id': 'question',
-            'witnesses': [{'source_id': source, 'start_line': 1, 'end_line': end}]}]}
-    assert validator.is_valid(mapping('wiki', 3))
-    assert validator.is_valid(mapping('web', 1))
-    assert not validator.is_valid(mapping('web', 3))
-    assert not validator.is_valid(mapping('private-not-authorized', 1))
-    # Decoder constraints supplement the unchanged, mandatory runtime gate.
-    with pytest.raises(InvalidEvidenceCoverage, match='range not in authorized'):
-        validate_coverage(req, json.dumps(mapping('web', 3)))
+    validator = Draft202012Validator(coverage_response_format(req)['json_schema']['schema'])
+    def mapping(value):
+        return {'digest': req.digest, 'items': [{'requirement_id': 'question', 'witnesses': [value]}]}
+    for paragraph, source, end in [('p0', 'wiki', 3), ('p1', 'web', 1)]:
+        assert validator.is_valid(mapping(paragraph))
+        receipt = validate_coverage(req, decode_coverage_selection(req, json.dumps(mapping(paragraph))))
+        assert receipt.items[0].witnesses[0].source_id == source
+        assert receipt.items[0].witnesses[0].end_line == end
+    for invalid in ['p2', {'source_id': 'web', 'start_line': 1, 'end_line': 3}]:
+        assert not validator.is_valid(mapping(invalid))
+        with pytest.raises(InvalidEvidenceCoverage):
+            validate_coverage(req, decode_coverage_selection(req, json.dumps(mapping(invalid))))
 
 
 def test_diagnostics_never_forward_unrecognized_model_or_exception_text():
@@ -173,17 +174,45 @@ def test_coverage_purpose_is_bound_and_cannot_reuse_source_receipt():
         prepare_coverage(req.question, req.requirements, req.sources, purpose="ignore-gaps")
 
 
-def test_decoder_cannot_select_blank_only_witness_and_preserves_source_bytes():
+def test_decoder_pairs_endpoints_and_covers_every_nonblank_line_without_truncation():
     from jsonschema import Draft202012Validator
-    from sage.runtime.evidence_coverage import coverage_response_format
-    source = PlanSource('s', 'Source', '', 'heading\n\nfull body\n\n')
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    source = PlanSource('s', 'Source', '', 'heading\r\n\r\n' + 'body ' * 5000 + '\r\ncontinued\r\n\r\nlast')
     req = prepare_coverage('What is reported?', question_requirements('What is reported?'), (source,))
-    validator = Draft202012Validator(coverage_response_format(req)['json_schema']['schema'])
-    def raw(start, end):
-        return {'digest':req.digest, 'items':[{'requirement_id':'question',
-            'witnesses':[{'source_id':'s','start_line':start,'end_line':end}]}]}
-    assert not validator.is_valid(raw(2, 2))
-    assert validator.is_valid(raw(1, 3))
-    receipt = validate_coverage(req, json.dumps(raw(1, 3)))
-    assert receipt.items[0].witnesses[0].quote == 'heading\n\nfull body\n'
-    assert req.sources[0].content == source.content
+    schema = coverage_response_format(req)['json_schema']['schema']
+    witnesses = schema['properties']['items']['items']['properties']['witnesses']
+    covered = set()
+    for paragraph in witnesses['items']['enum']:
+        raw = {'digest': req.digest, 'items': [{'requirement_id': 'question', 'witnesses': [paragraph]}]}
+        assert Draft202012Validator(schema).is_valid(raw)
+        receipt = validate_coverage(req, decode_coverage_selection(req, json.dumps(raw)))
+        value = receipt.items[0].witnesses[0]
+        assert value.quote == ''.join(source.content.splitlines(keepends=True)[value.start_line-1:value.end_line])
+        covered.update(range(value.start_line, value.end_line + 1))
+    assert covered == {i for i, line in enumerate(source.content.splitlines(), 1) if line.strip()}
+    assert witnesses['maxItems'] == 3
+    assert ''.join(line['text'] for line in json.loads(req.payload)['sources'][0]['lines']) == source.content
+    raw['items'][0]['witnesses'] *= 4
+    assert not Draft202012Validator(schema).is_valid(raw)
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(req, decode_coverage_selection(req, json.dumps(raw)))
+    # A reversed range is impossible in the model protocol and remains rejected
+    # by the independent canonical validator (including historical receipts).
+    raw['items'][0]['witnesses'] = [{'source_id': 's', 'start_line': 3, 'end_line': 1}]
+    assert not Draft202012Validator(schema).is_valid(raw)
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(req, json.dumps(raw))
+
+
+def test_compact_paragraph_decoder_schema_grows_with_ids_not_object_branches():
+    source = PlanSource('s', 'Long source', '', '\n\n'.join('Paragraph ' + str(i) for i in range(1000)))
+    req = prepare_coverage('Question?', question_requirements('Question?'), (source,))
+    assert len(json.dumps(coverage_response_format(req))) < 10000
+
+
+@pytest.mark.parametrize('raw', ['not JSON', '{"digest":"stale","items":[]}', '{"unexpected":true}'])
+def test_model_selection_decode_never_turns_bad_output_into_empty_valid_coverage(raw):
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    req = request()
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(req, decode_coverage_selection(req, raw))
