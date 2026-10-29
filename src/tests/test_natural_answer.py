@@ -92,7 +92,7 @@ def test_audit_schema_binds_each_sources_own_line_ids():
 
 
 def test_conversation_evidence_scope_is_bound_through_workflow_and_review():
-    from sage.runtime.evidence_coverage import prepare_coverage, question_requirements
+    from sage.runtime.evidence_coverage import prepare_coverage, question_requirements, validate_coverage
     from sage.runtime.evidence_workflow import EvidenceWork, _selected_request, _audit_request, _natural_request
     from sage.runtime.source_answer_plan import SourceAnswerPlan
     dialogue = PlanSource("dialogue", "Prior turn", "", "Assistant: proposed 30%, not a measurement", kind="conversation")
@@ -102,10 +102,14 @@ def test_conversation_evidence_scope_is_bound_through_workflow_and_review():
     work = EvidenceWork(req, (document, dialogue), req.digest)
     selected = replace(work, request=_selected_request(work))
     assert dialogue in selected.request.sources  # Not discarded by subject-name filtering.
-    work = replace(selected, plan=SourceAnswerPlan("unused", ("dialogue",), ()))
+    receipt = validate_coverage(selected.request, json.dumps({'digest':selected.request.digest,
+        'items':[{'requirement_id':r.requirement_id, 'witnesses':[{
+            'source_id':'dialogue','start_line':1,'end_line':1}]} for r in selected.request.requirements]}))
+    work = replace(selected, assessment=receipt, plan=SourceAnswerPlan("unused", ("dialogue",), ()))
     draft = _natural_request(work)
     audit = _audit_request(work, "The previous answer proposed 30%, not a measured result.")
     assert json.loads(draft.payload)["sources"][0]["kind"] == "conversation"
+    assert json.loads(draft.payload)['evidence_plan'][0]['passages'][0] == {'source_id':'dialogue','start_line':1,'end_line':1}
     assert json.loads(audit.payload)["sources"][0]["kind"] == "conversation"
     untyped = prepare_source_audit(question, "The previous answer proposed 30%, not a measured result.", {"dialogue": dialogue.content})
     assert untyped.digest != audit.digest
@@ -128,3 +132,42 @@ def test_repair_feedback_resolves_sentence_ids_not_paragraph_indices():
     for failures in (("unit:9",), ("unit:-1",), ("bogus",)):
         with pytest.raises(ValueError):
             natural_answer_payload(request, rejected, failures)
+
+
+def test_answer_focus_preserves_validated_passages_and_complete_sources_without_promoting_tampering():
+    from sage.runtime.evidence_coverage import prepare_coverage, question_requirements, validate_coverage, InvalidEvidenceCoverage
+    question = 'What is the status?'
+    req = prepare_coverage(question, question_requirements(question), (SOURCE,))
+    assessment = validate_coverage(req, json.dumps({'digest': req.digest, 'items':[
+        {'requirement_id':'question', 'witnesses':[{'source_id':'s','start_line':2,'end_line':2}]}]}))
+    answer = prepare_natural_answer(question, (SOURCE,), coverage_request=req, assessment=assessment)
+    data = json.loads(answer.payload)
+    assert data['sources'][0]['content'] == SOURCE.content
+    assert data['evidence_plan'] == [{'question_part': question, 'passages':[
+        {'source_id':'s','start_line':2,'end_line':2}]}]
+    assert answer.digest != prepare_natural_answer(question,(SOURCE,)).digest
+    witness = assessment.items[0].witnesses[0]
+    forged = replace(assessment, items=(replace(assessment.items[0], witnesses=(replace(witness,quote='Invented result'),)),))
+    with pytest.raises(InvalidEvidenceCoverage):
+        prepare_natural_answer(question,(SOURCE,),coverage_request=req,assessment=forged)
+    with pytest.raises(ValueError, match='supporting source'):
+        prepare_natural_answer(question,(),coverage_request=req,assessment=assessment)
+    with pytest.raises(ValueError, match='snapshot'):
+        prepare_natural_answer(question,(replace(SOURCE,content='changed'),),coverage_request=req,assessment=assessment)
+    with pytest.raises(ValueError, match='matching question'):
+        prepare_natural_answer('another question',(SOURCE,),coverage_request=req,assessment=assessment)
+    with pytest.raises(ValueError, match='matching question'):
+        prepare_natural_answer(question,(SOURCE,),coverage_request=replace(req,purpose='answer_completeness'),assessment=assessment)
+
+
+def test_single_line_audit_schema_cannot_force_duplicate_line_references():
+    from jsonschema import validate, ValidationError
+    request = prepare_source_audit('Status?', 'It is ongoing.', {'one':'Ongoing.'})
+    schema = audit_response_format(request)['json_schema']['schema']
+    raw = {'digest':request.digest,'units':[{'id':0,'verdict':'supported',
+        'evidence':[{'source_id':'one','line_ids':[0,0]}]}]}
+    with pytest.raises(ValidationError):
+        validate(raw, schema)
+    raw['units'][0]['evidence'][0]['line_ids'] = [0]
+    validate(raw, schema)
+    assert audit_failures(request, json.dumps(raw)) == ()

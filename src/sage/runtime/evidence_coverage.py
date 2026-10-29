@@ -88,6 +88,8 @@ digest and one item per requirement:
 Select the paragraph IDs allowed by the response schema from the complete
 numbered sources; use multiple witnesses for evidence across paragraphs. Never
 rewrite or quote source text in your response. Line numbers are local to each source.
+An ID denotes an entire Markdown section when the source has headings, otherwise
+a paragraph. These are immutable contiguous ranges; choose IDs, not new endpoints.
 Select a sufficient set of supporting paragraphs, not every topically related
 paragraph. Exclude duplicate claims, navigation and bibliographies. Keep the
 complementary paragraphs needed for both alternatives and their conditions;
@@ -165,7 +167,7 @@ def prepare_coverage(
     if cursor != len(question):
         raise InvalidEvidenceCoverage("uncovered question suffix")
     paragraph_choices = _paragraph_choices(sources)
-    body = {"version": 3, "question": question, "purpose": purpose,
+    body = {"version": 4, "question": question, "purpose": purpose,
             "requirements": [{**vars(item), "text": question[item.start:item.end]} for item in requirements],
             "sources": [{"source_id": source.source_id, "title": source.title, "url": source.url, "kind": source.kind,
                          "paragraphs": [{"id": key, "start_line": start, "end_line": end}
@@ -179,10 +181,35 @@ def prepare_coverage(
 
 
 def _paragraph_choices(sources):
+    """Select lossless structural blocks, not hundreds of adjacent blank-line IDs.
+
+    Markdown section boundaries preserve conditions together with their claims.
+    Plain text retains paragraph granularity. Every ID still resolves to exactly
+    one authorized source range; the model cannot reverse or cross endpoints.
+    """
     choices = {}
     for source in sources:
         start = None
         lines = source.content.splitlines(keepends=True)
+        headings = []
+        fence = None
+        for index, line in enumerate(lines, 1):
+            marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+            if marker:
+                token = marker.group(1)
+                if fence is None:
+                    fence = token
+                elif token[0] == fence[0] and len(token) >= len(fence) and not line[marker.end():].strip():
+                    fence = None
+                continue
+            if fence is None and re.match(r"^ {0,3}#{1,6}[ \t]+", line):
+                headings.append(index)
+        if headings:
+            boundaries = sorted({1, *headings, len(lines) + 1})
+            for first, stop in zip(boundaries, boundaries[1:]):
+                if any(line.strip() for line in lines[first-1:stop-1]):
+                    choices[f"p{len(choices)}"] = (source.source_id, first, stop - 1)
+            continue
         for index, line in enumerate([*lines, ""], 1):
             if line.strip():
                 if start is None:

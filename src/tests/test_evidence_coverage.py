@@ -216,3 +216,21 @@ def test_model_selection_decode_never_turns_bad_output_into_empty_valid_coverage
     req = request()
     with pytest.raises(InvalidEvidenceCoverage):
         validate_coverage(req, decode_coverage_selection(req, raw))
+
+
+def test_markdown_sections_keep_contiguous_evidence_without_truncation_or_reversed_endpoints():
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    text = '# Tradeoff\n\nMigration can win.\n\nOnly if transfer is cheaper.\n\n```text\n# Not a heading\n```\n\n## Other case\n\nRecompute can win.\n\nWhen transfer costs more.\n'
+    source = PlanSource('s','Comparison','https://example.org/full',text)
+    req = prepare_coverage('When does each win?',question_requirements('When does each win?'),(source,))
+    paragraphs = json.loads(req.payload)['sources'][0]['paragraphs']
+    assert len(paragraphs)==2
+    raw = json.dumps({'digest':req.digest,'items':[{'requirement_id':'question',
+        'witnesses':[p['id'] for p in paragraphs]}]})
+    receipt = validate_coverage(req,decode_coverage_selection(req,raw))
+    witnesses=receipt.items[0].witnesses
+    assert ''.join(w.quote for w in witnesses)==text
+    assert 'Migration can win.' in witnesses[0].quote and 'Only if transfer is cheaper.' in witnesses[0].quote
+    assert '# Not a heading' in witnesses[0].quote
+    assert 'Recompute can win.' in witnesses[1].quote and 'When transfer costs more.' in witnesses[1].quote
+    assert json.loads(req.payload)['version']==4

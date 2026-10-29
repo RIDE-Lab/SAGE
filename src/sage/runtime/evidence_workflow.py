@@ -196,7 +196,8 @@ def compose(work):
 def _natural_request(work):
     used = set(work.plan.source_ids)
     return prepare_natural_answer(work.request.question,
-        tuple(s for s in work.request.sources if s.source_id in used))
+        tuple(s for s in work.request.sources if s.source_id in used),
+        coverage_request=work.request, assessment=work.assessment)
 
 
 def _audit_request(work, answer):
