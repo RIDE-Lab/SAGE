@@ -436,3 +436,70 @@ def test_missing_coverage_plans_search_inside_native_flow_and_revalidates_source
         assert len(result.candidates) == 2
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize('reject', [False, True])
+def test_final_audit_is_required_even_when_preflight_accepts_every_unit(reject):
+    class FinalPorts(Ports):
+        requires_final_audit = True
+        final_calls = 0
+        def final_audit_answer(self, request):
+            self.final_calls += 1
+            raw = json.loads(super().audit_answer(request))
+            if reject:
+                raw['units'][0].update(verdict='unsupported', evidence=[])
+            return json.dumps(raw)
+    ports, runtime = FinalPorts(), EvidenceWorkflowRuntime()
+    try:
+        if reject:
+            with pytest.raises(FlowRequestOutcomeError) as caught:
+                runtime.run('Explain A?', (SOURCE,), ports, timeout=5)
+            assert caught.value.error_type == 'SourceAuditRejected'
+        else:
+            result = runtime.run('Explain A?', (SOURCE,), ports, timeout=5)
+            assert result.final_audit == result.natural.audit
+            with pytest.raises(Exception, match='missing bound final source audit'):
+                render_evidence_work(replace(result, final_audit=None))
+        assert ports.final_calls == 1
+    finally:
+        runtime.close()
+
+
+def test_corrected_draft_gets_one_final_audit_with_every_unit_and_full_sources():
+    class FinalPorts(Ports):
+        requires_final_audit = True
+        drafts = 0
+        finals = []
+        def write_answer(self, request, rejected=None, failures=()):
+            self.drafts += 1
+            return super().write_answer(request, rejected, failures)
+        def audit_answer(self, request):
+            raw = json.loads(super().audit_answer(request))
+            if self.drafts == 1:
+                raw['units'][0].update(verdict='unsupported', evidence=[])
+            return json.dumps(raw)
+        def final_audit_answer(self, request):
+            self.finals.append(request)
+            return Ports.audit_answer(self, request)
+    ports, runtime = FinalPorts(), EvidenceWorkflowRuntime()
+    try:
+        result = runtime.run('A and B?', (SOURCE,SUPPLEMENT), ports, timeout=5)
+        assert ports.drafts == 2 and len(ports.finals) == 1
+        assert len(ports.finals[0].sources) == 2
+        assert len(ports.finals[0].units) > 1
+        assert result.final_audit and result.answer_failures == ()
+    finally:
+        runtime.close()
+
+
+def test_no_evidence_notice_does_not_fabricate_final_audit():
+    class FinalPorts(Ports):
+        requires_final_audit = True
+        def final_audit_answer(self, request):
+            pytest.fail('no draft exists')
+    runtime = EvidenceWorkflowRuntime()
+    try:
+        result = runtime.run('Unknown?', (), FinalPorts(no_evidence=True), timeout=5)
+        assert result.final_audit_required and result.final_audit is None
+    finally:
+        runtime.close()

@@ -240,14 +240,23 @@ def execute_web_research(
                     hits = candidates
                     break
                 observe("running", "正在检查网页是否切题。", None)
+                # Retain previously accepted partial evidence. A failed second
+                # provider call cannot erase the first source; no request replay
+                # or private context is introduced by this read-only supplement.
+                if not candidates and hits:
+                    break
+                combined = {hit.url: hit for hit in hits}
+                for candidate in candidates:
+                    combined.setdefault(candidate.url, candidate)
+                candidates = list(combined.values())
                 request = prepare_search_review(decision.query, candidates, attempted_queries=attempted_queries, public_context=public_context)
                 raw = read_tool_executor.call(lambda r=request: review(r), timeout=max(0, deadline-monotonic()))
                 selected, retry = validate_search_review(request, raw)
                 hits = [candidates[i] for i in selected]
-                if hits or not retry or retry in attempted_queries or attempt:
+                if not retry or retry in attempted_queries or attempt:
                     break
                 query = retry
-                observe("running", "候选网页不够相关，正在调整搜索词。", None)
+                observe("running", "正在补搜问题尚未覆盖的部分。" if hits else "候选网页不够相关，正在调整搜索词。", None)
             if monotonic() > deadline:
                 raise TimeoutError("web research deadline exceeded")
     except ReadToolDeadlineExceeded:

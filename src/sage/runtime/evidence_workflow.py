@@ -68,6 +68,8 @@ class EvidenceWork:
     answer_failures: tuple[str, ...] = ()
     rejected_audit: str | None = None
     audit_failure: str | None = None
+    final_audit_required: bool = False
+    final_audit: str | None = None
 
 
 def _selected_request(work):
@@ -231,7 +233,7 @@ def write_answer(work):
         return work
     request = _natural_request(work)
     answer = validate_natural_answer(request, _ports.get().write_answer(request, work.draft, work.answer_failures))
-    return replace(work, draft=answer, natural=None, answer_failures=())
+    return replace(work, draft=answer, natural=None, answer_failures=(), final_audit=None)
 
 
 def _review_receipt(work, audit):
@@ -297,6 +299,34 @@ def answer_accepted(work):
 
 
 
+@stateless(uri="stateless://sage/evidence/needs-final-audit", namespace="sage")
+def needs_final_audit(work):
+    return work.final_audit_required and work.draft is not None
+
+
+@stateless(uri="stateless://sage/evidence/no-final-audit", namespace="sage")
+def no_final_audit(work):
+    return not (work.final_audit_required and work.draft is not None)
+
+
+@stateless(uri="stateless://sage/evidence/final-audit", namespace="sage")
+def final_audit(work):
+    # Fast reviews may guide a single bounded revision, but cannot authorize
+    # publication under this policy. Audit EVERY unit of the final draft once,
+    # with the same complete immutable sources, not just previously failed units.
+    if work.natural is None or work.draft != work.natural.answer:
+        raise SourceAuditRejected("final audit requires a bound reviewed draft")
+    try:
+        audit = _ports.get().final_audit_answer(_audit_request(work, work.draft))
+    except AuditProtocolRejected as exc:
+        raise SourceAuditRejected("final audit receipt failed validation") from exc
+    receipt = replace(work.natural, audit=audit)
+    failures = _review_failures(work, receipt)
+    if failures:
+        raise SourceAuditRejected("final answer failed source or completeness review")
+    return replace(work, natural=receipt, final_audit=audit, answer_failures=())
+
+
 def _answer_source_ids(work):
     # Retain all relevant evidence selected by the bound assessment. A short
     # source can answer one aspect while losing the comparison's other cases.
@@ -354,6 +384,8 @@ def render_evidence_work_blocks(work: EvidenceWork) -> tuple[SourceAnswerBlock, 
                 raise SourceAuditRejected("natural answer failed source or completeness review")
             if work.draft != work.natural.answer:
                 raise SourceAuditRejected("answer changed after review")
+            if work.final_audit_required and (work.final_audit is None or work.final_audit != work.natural.audit):
+                raise SourceAuditRejected("missing bound final source audit")
             parts = [SourceAnswerBlock("answer", work.natural.answer)]
             if work.plan.inferences:
                 parts.extend(b for b in render_source_plan_blocks(request, work.plan) if b.kind == "inference")
@@ -396,7 +428,10 @@ def evidence_quality_flow(init_stream):
     drafted = _reviewed(reviewed.map(write_answer, operator_key="write-natural-answer"), "review-natural-answer")
     corrected = _reviewed(drafted.filter(answer_rejected, operator_key="answer-needs-correction").map(
         write_answer, operator_key="correct-natural-answer"), "review-corrected-answer")
-    return corrected.connect(drafted.filter(answer_accepted, operator_key="answer-review-passed")).map(
+    prepared = corrected.connect(drafted.filter(answer_accepted, operator_key="answer-review-passed"))
+    final = prepared.filter(needs_final_audit, operator_key="requires-final-source-audit").map(
+        final_audit, operator_key="final-source-audit")
+    return final.connect(prepared.filter(no_final_audit, operator_key="no-final-source-audit")).map(
         verify, operator_key="verify-evidence-answer")
 
 
@@ -421,10 +456,13 @@ class EvidenceWorkflowRuntime:
             research = task.research_requested
         request = prepare_coverage(question, requirements if requirements is not None else
             question_requirements(question), sources, public_context=public_context)
+        final_required = getattr(ports, "requires_final_audit", False)
+        if type(final_required) is not bool or (final_required and not callable(getattr(ports, "final_audit_answer", None))):
+            raise ValueError("final audit policy requires an explicit audit adapter")
         token = _ports.set(ports)
         try:
             outputs = self._endpoint.call(EvidenceWork(request, candidates=sources,
-                candidate_digest=request.digest, research=research,
+                candidate_digest=request.digest, research=research, final_audit_required=final_required,
                 experiments_requested=research if task is None else task.experiments_requested), timeout=timeout)
         finally:
             _ports.reset(token)

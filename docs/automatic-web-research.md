@@ -24,7 +24,8 @@ The disclosure decision first binds a contiguous public span of the current
 question. The optional query planner sees only that approved span, public
 candidate snippets, and a configured published discipline. It may derive technical
 search terms from that data; conversation history, private attachments and internal
-retrieval-repair queries must never reach it or the external transport. An explicitly
+retrieval-repair queries must never reach it or the external transport. Only ambiguous queries need this broad domain anchor; unambiguous technical
+concepts should not require pages to contain the broad discipline name. An explicitly
 selected public discipline is searched as a quoted phrase to prevent optional
 bag-of-words matching from erasing its meaning. An explicit question about another
 field overrides that default, with the decision bound in the relevance receipt. Common credential/email guards are defense in depth, not
@@ -57,3 +58,12 @@ It admits at most four outstanding read-only operations, retains capacity until
 cleanup, and discards late results. Python cannot forcibly cancel running DNS;
 the timeout receipt explicitly says cleanup may remain pending. This executor
 must never be used to replay or abandon externally mutating operations.
+
+
+Direct relevance does not imply complete coverage. The review may retain useful
+candidates and request one complementary search for a missing comparison/scenario.
+The second review sees the accepted sources plus new URL-deduplicated candidates,
+never private retrieval context. The same two-attempt and total deadline apply.
+A failed second provider call preserves previously accepted excerpts; these still
+require downstream coverage and source checks and are never declared complete
+merely because the read succeeded.

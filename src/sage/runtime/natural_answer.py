@@ -26,6 +26,11 @@ not to add unrelated sections simply because they are in the same document.
 Do not begin with "according to the provided materials". For a comparison,
 explain BOTH alternatives and the conditions/tradeoffs that distinguish them.
 Do not turn a comparison into instructions for using just one alternative.
+Do not silently equate a broad term in the question with one narrower scenario
+from a source. Explain which scenario a source covers and preserve the broader
+comparison when the other sources support it. Each paragraph must add a distinct
+part of the explanation; do not repeat the opening cost comparison or append a
+generic conclusion that merely restates the same conditions.
 For a general tradeoff question, explain the general cost drivers, not named
 hardware or individual implementations unless the user asks about them. If the
 tradeoff depends on multiple variables, do not claim one variable alone decides

@@ -38,7 +38,7 @@ def test_relevance_retry_is_bounded_and_never_returns_rejected_hits():
 def test_malformed_or_stale_relevance_fails_closed():
     req=prepare_search_review('query',[hit('a')])
     for patch in ({'digest':'stale'},{'selected':[1]},{'selected':[True]},{'selected':[0,0]},
-                  {'selected':[0],'retry_query':'another'}, {'selected':[],'retry_query':'api_key=secret'}):
+                  {'selected':[],'retry_query':'api_key=secret'}):
         raw={'digest':req.digest,'selected':[0],'retry_query':None,**patch}
         with pytest.raises(ValueError):validate_search_review(req,receipt(req, raw))
     events=[]
@@ -158,3 +158,36 @@ def test_background_cannot_be_promoted_by_selected_ids_and_roles_must_be_complet
     raw['candidate_roles'] = []
     with pytest.raises(ValueError, match='incomplete search candidate roles'):
         validate_search_review(req, json.dumps(raw))
+
+
+def test_partial_sources_trigger_complementary_read_and_deduplicate_urls():
+    queries = []; events = []
+    def search(query):
+        queries.append(query)
+        return [hit('one')] if len(queries) == 1 else [hit('one'), hit('two')]
+    def review(req):
+        data = json.loads(req.payload)
+        if not req.count:
+            return receipt(req, dict(digest=req.digest, selected=[], retry_query='first'))
+        return receipt(req, dict(digest=req.digest, selected=list(range(req.count)),
+            retry_query='complementary relation' if len(queries) == 1 else None))
+    result = execute_web_research(WebDecision('auto','guest',True,'approved','public comparison'),
+        search, lambda *e: events.append(e), review=review)
+    assert queries == ['first','complementary relation']
+    assert [h.title for h in result] == ['one','two']
+    assert events[-1][0] == 'completed'
+
+
+def test_complementary_provider_failure_preserves_accepted_source():
+    queries = []
+    def search(query):
+        queries.append(query)
+        if len(queries) == 2:
+            raise TimeoutError('second endpoint')
+        return [hit('one')]
+    def review(req):
+        return receipt(req, dict(digest=req.digest, selected=[0] if req.count else [],
+            retry_query='complement' if req.count else 'first'))
+    result = execute_web_research(WebDecision('auto','guest',True,'approved','public comparison'),
+        search, lambda *e: None, review=review)
+    assert len(queries) == 2 and [h.title for h in result] == ['one']

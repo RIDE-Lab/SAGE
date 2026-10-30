@@ -28,7 +28,13 @@ better search query retaining the original subject
 and relation. You may translate technical terms into English and quote compound
 terms to disambiguate; do not add another person's/project's/private facts or
 narrow the question to an unrequested technique. No external/private context is
-available. If relevant candidates exist, retry_query must be null.
+available. Relevance is not completeness: when selected candidates only cover
+one alternative, a specialized scenario, or one requested relation, retain them
+and propose a complementary retry_query for the missing public information need.
+Do not equate one specific implementation/scenario with a broader technical term.
+Stop with retry_query null when the selected set covers the requested comparison
+and conditions, or when no faithful complementary query can be proposed.
+Keep all complementary direct candidates, not just the highest-ranked page.
 Return JSON only: {"digest": supplied digest, "selected": [candidate integer IDs],
 "retry_query": null or a faithful search query}. Do not invent candidate IDs.
 """
@@ -53,9 +59,12 @@ Return JSON only: {"digest": supplied digest, "selected": [],
 """
 
 _SCOPE_INSTRUCTIONS = """When the schema includes domain_context, choose the supplied
-public_context verbatim for a question in that field or with an ambiguous subject
-that the site's published field disambiguates. Choose null for an explicit
-different field or a subject that needs no such context (e.g. weather).
+public_context verbatim ONLY when the subject is ambiguous and the site's
+published field is needed to disambiguate it. Choose null when the query already
+names unambiguous domain-specific technical concepts, for an explicit different
+field, or for a subject that needs no such context (e.g. weather). Do not attach
+a broad field label to every question in that field: exact search phrases would
+otherwise exclude relevant technical pages that never use that broad label.
 The runtime will attach this selected public scope to retry_query; do not rely
 on search results to infer a different discipline. Never infer it from private data.
 """
@@ -139,7 +148,7 @@ def validate_search_review(request, raw):
                 raise ValueError('invalid search candidate role')
             roles[entry['id']] = entry['role']
     retry=data['retry_query']
-    if retry is not None and (not isinstance(retry,str) or not retry.strip() or len(retry)>512 or data['selected']):
+    if retry is not None and (not isinstance(retry,str) or not retry.strip() or len(retry)>512):
         raise ValueError('invalid search retry proposal')
     # Query derivation sees only already approved public text and public pages.
     # No private context may be provided to this port. Reject credential syntax.

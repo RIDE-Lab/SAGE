@@ -120,3 +120,15 @@ text. Prose generation and entailment review have different model requirements:
 qualify the configured model sampling and native reasoning on real positive and
 negative controls, not only shape-valid JSON. This library does not select or
 silently replace the application's model.
+
+
+When an adapter declares `requires_final_audit=True`, the ordinary source reviews
+are preflight feedback only. One final native `final-source-audit` node reviews
+**every** sentence of the final draft against the complete immutable source
+snapshot, after any bounded correction. The final receipt replaces the preflight
+receipt; rendering requires that exact receipt. The draft's already-bound
+completeness receipt is revalidated without another model call. A final rejection
+or malformed receipt stops publication; it cannot fall back to preflight approval.
+No-source notices do not fabricate an audit event. Adapters without this policy
+retain their existing qualified review contract. Model qualification and actual
+end-to-end latency remain separate acceptance requirements.
