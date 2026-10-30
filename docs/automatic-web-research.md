@@ -59,6 +59,20 @@ cleanup, and discards late results. Python cannot forcibly cancel running DNS;
 the timeout receipt explicitly says cleanup may remain pending. This executor
 must never be used to replay or abandon externally mutating operations.
 
+`search_provider_fallback` reserves each provider a share of the remaining
+search deadline. Unused time passes forward; a hung primary cannot spend the
+entire budget before backups run. Providers use a separate eight-slot bounded
+executor, because the adapter may already occupy an outer read slot. Timed-out
+providers retain their slots until cleanup and cannot replace a later result.
+This is a sequential public-read fallback, not a generation or mutation retry.
+All-provider failure is distinct from a successful empty search.
+
+An explicitly configured public discipline disambiguates the query as ordinary
+search terms, not a mandatory exact phrase in every source. Explicit other-field
+questions remain outside that scope. Adapters must preserve planned phrases,
+operators and complete search terms instead of applying a display/ranking
+tokenizer or character limit to the actual provider request.
+
 
 Direct relevance does not imply complete coverage. The review may retain useful
 candidates and request one complementary search for a missing comparison/scenario.

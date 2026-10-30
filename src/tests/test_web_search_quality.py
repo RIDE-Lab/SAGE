@@ -100,7 +100,7 @@ def test_public_scope_is_explicit_bound_and_applied_to_provider_query():
     req = prepare_search_review('优化实验', [], public_context='Computer systems research')
     raw = {'digest': req.digest, 'selected': [], 'retry_query': 'performance evaluation',
            'domain_context': 'Computer systems research'}
-    assert validate_search_review(req, receipt(req, raw))[1] == '"Computer systems research" performance evaluation'
+    assert validate_search_review(req, receipt(req, raw))[1] == 'Computer systems research performance evaluation'
     # An explicit question outside the site's field need not be constrained.
     raw.update(domain_context=None, retry_query='weather forecast')
     assert validate_search_review(req, receipt(req, raw))[1] == 'weather forecast'

@@ -13,9 +13,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
 
-from sage.runtime.read_tool_deadline import ReadToolDeadlineExceeded, read_tool_executor
+from sage.runtime.read_tool_deadline import ReadToolDeadlineExceeded, ReadToolExecutor, read_tool_executor
 
 _deadline = ContextVar("sage_web_research_deadline", default=None)
+# The public search adapter itself may run in read_tool_executor. Providers use
+# a separate bounded pool so concurrent outer calls cannot consume all slots
+# while waiting for nested work in the same pool. Late cleanup remains bounded.
+search_provider_executor = ReadToolExecutor(capacity=8)
 
 
 def web_research_deadline():
@@ -32,6 +36,40 @@ def web_research_budget(seconds):
         yield _deadline.get()
     finally:
         _deadline.reset(token)
+
+
+def search_provider_fallback(providers, *, observe=lambda *args: None):
+    """Run read-only search providers without starving later fallbacks.
+
+    Each provider gets a share of the remaining common deadline, including DNS
+    and cleanup time. Unused time passes forward. A blocked adapter may still
+    clean up in the bounded read executor; its late value is never accepted.
+    This is for public search reads only, never generation or business writes.
+    """
+    providers = tuple(providers)
+    deadline = web_research_deadline()
+    if deadline is None:
+        raise ValueError("search_provider_deadline_required")
+    completed = False
+    for index, (name, operation) in enumerate(providers):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        allowance = remaining / (len(providers) - index)
+        try:
+            with web_research_budget(allowance):
+                result = search_provider_executor.call(operation, timeout=allowance)
+            completed = True
+        except Exception as error:
+            # Never expose provider messages, queries or credentials in logs.
+            observe(name, "failed", type(error).__name__)
+            continue
+        observe(name, "completed" if result else "empty", None)
+        if result:
+            return result
+    if not completed:
+        raise RuntimeError("web_search_providers_unavailable")
+    return []
 
 
 WEB_RESEARCH_INSTRUCTIONS = """
