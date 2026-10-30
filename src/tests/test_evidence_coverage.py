@@ -137,126 +137,121 @@ def test_request_cannot_be_rebound_while_reusing_the_digest(field):
         validate_coverage(replace(req, **{field: replacements[field]}), response(req))
 
 
-def roles(req):
-    return [{"source_id": s.source_id, "studied_subject": "fixture", "role": "direct"} for s in req.sources]
+
+def selection(req, selected):
+    payload = json.loads(req.payload)
+    return {'digest': req.digest, 'requested_relation': 'fixture relation', 'source_assessments': {source['source_id']: {
+        'studied_subject':'fixture', 'established_relation':'fixture relation', 'selection': {'role':'direct', 'requirements': {
+            r.requirement_id: {p['id']:(p['id'] in selected) for p in source['paragraphs']}
+            for r in req.requirements}}} for source in payload['sources']}}
 
 
-def test_decoder_schema_binds_selections_to_original_source_paragraphs():
+def test_decoder_binds_source_local_sets_to_original_ranges_without_truncation():
     from jsonschema import Draft202012Validator
     from sage.runtime.evidence_coverage import decode_coverage_selection
-    req = prepare_coverage('Explain the pipeline?', question_requirements('Explain the pipeline?'), (
-        PlanSource('wiki', 'Pipeline', 'https://example.org/wiki', 'prefill\ndecode\nverification'),
-        PlanSource('web', 'Snippet', 'https://example.org/web', 'One line only.'),
-    ))
+    text = 'heading\r\n\r\n' + 'body '*5000 + '\r\ncontinued\r\n\r\nlast'
+    sources = (PlanSource('s','Source','',text), PlanSource('other','Other','','Other source.'))
+    req = prepare_coverage('Question?',question_requirements('Question?'),sources)
     validator = Draft202012Validator(coverage_response_format(req)['json_schema']['schema'])
-    def mapping(value):
-        return {'digest': req.digest, 'source_roles': roles(req), 'items': [{'requirement_id': 'question', 'witnesses': [value]}]}
-    for paragraph, source, end in [('p0', 'wiki', 3), ('p1', 'web', 1)]:
-        assert validator.is_valid(mapping(paragraph))
-        receipt = validate_coverage(req, decode_coverage_selection(req, json.dumps(mapping(paragraph))))
-        assert receipt.items[0].witnesses[0].source_id == source
-        assert receipt.items[0].witnesses[0].end_line == end
-    for invalid in ['p2', {'source_id': 'web', 'start_line': 1, 'end_line': 3}]:
-        assert not validator.is_valid(mapping(invalid))
-        with pytest.raises(InvalidEvidenceCoverage):
-            validate_coverage(req, decode_coverage_selection(req, json.dumps(mapping(invalid))))
+    covered = {source.source_id:set() for source in sources}
+    for source in json.loads(req.payload)['sources']:
+        for paragraph in source['paragraphs']:
+            raw = selection(req,[paragraph['id']])
+            assert validator.is_valid(raw)
+            receipt = validate_coverage(req,decode_coverage_selection(req,json.dumps(raw)))
+            witness = receipt.items[0].witnesses[0]
+            original = next(s for s in sources if s.source_id == witness.source_id)
+            assert witness.quote == ''.join(original.content.splitlines(keepends=True)[witness.start_line-1:witness.end_line])
+            covered[witness.source_id].update(range(witness.start_line,witness.end_line+1))
+    for source in sources:
+        assert covered[source.source_id] == {i for i,line in enumerate(source.content.splitlines(),1) if line.strip()}
+    assert json.loads(req.payload)['version'] == 6
+
+
+@pytest.mark.parametrize('mutation', ['background','irrelevant','unknown','other_source','nonbool','array','omitted','stale','missing_subject','extra'])
+def test_invalid_selection_cannot_be_silently_accepted_or_promote_a_role(mutation):
+    from jsonschema import Draft202012Validator
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    req = prepare_coverage('Question?',question_requirements('Question?'),(
+        PlanSource('s','Source','','A.'),PlanSource('other','Other','','B.')))
+    data = selection(req,['p0'])
+    item = data['source_assessments']['s']
+    if mutation in ('background','irrelevant'):item['selection']['role'] = mutation
+    if mutation == 'unknown':item['selection']['requirements']['question'] = {'p99':True}
+    if mutation == 'other_source':item['selection']['requirements']['question'] = {'p1':True}
+    if mutation == 'nonbool':item['selection']['requirements']['question'] = {'p0':1}
+    if mutation == 'array':item['selection']['requirements']['question'] = ['p0','p0']
+    if mutation == 'omitted':data['source_assessments'].pop('other')
+    if mutation == 'stale':data['digest'] = 'stale'
+    if mutation == 'missing_subject':item.pop('studied_subject')
+    if mutation == 'extra':data['extra'] = True
+    assert not Draft202012Validator(coverage_response_format(req)['json_schema']['schema']).is_valid(data)
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(req,decode_coverage_selection(req,json.dumps(data)))
+
+
+def test_background_role_without_witnesses_is_an_explicit_gap_not_a_failure():
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    req = request();data = selection(req,[])
+    data['source_assessments']['public']['selection'] = {'role':'background'}
+    checked = validate_coverage(req,decode_coverage_selection(req,json.dumps(data)))
+    assert checked.missing_ids == ('a','b')
+    complete = prepare_coverage(req.question,req.requirements,req.sources,purpose='answer_completeness')
+    data['digest'] = complete.digest
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(complete,decode_coverage_selection(complete,json.dumps(data)))
+
+
+def test_source_local_grammar_cannot_emit_cross_source_or_role_contradictions():
+    pytest.importorskip('xgrammar')
+    from xgrammar.testing import _is_grammar_accept_string
+    from sage.runtime.structured_json import compact_json_grammar
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    req = request();data = selection(req,['p0'])
+    raw = json.dumps(data,separators=(',',':'))
+    grammar = compact_json_grammar(coverage_response_format(req)['json_schema']['schema'])
+    assert _is_grammar_accept_string(grammar,raw)
+    repeated = raw.replace('"p0":true','"p0":true,"p0":true')
+    assert not _is_grammar_accept_string(grammar,repeated)
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(req,decode_coverage_selection(req,repeated))
+    data['source_assessments']['public']['selection']['role'] = 'background'
+    assert not _is_grammar_accept_string(grammar,json.dumps(data,separators=(',',':')))
+
+
+def test_source_local_schema_is_linear_in_paragraph_count():
+    sizes = []
+    for count in (100,1000):
+        source = PlanSource('s','Long','','\n\n'.join('Paragraph '+str(i) for i in range(count)))
+        req = prepare_coverage('Question?',question_requirements('Question?'),(source,))
+        sizes.append(len(json.dumps(coverage_response_format(req))))
+    assert sizes[1] < sizes[0]*10 and sizes[1] < 40000
+
+
+@pytest.mark.parametrize('raw',['not JSON','{"digest":"stale","items":[]}','{"unexpected":true}'])
+def test_model_selection_decode_never_turns_bad_output_into_empty_valid_coverage(raw):
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    req = request()
+    with pytest.raises(InvalidEvidenceCoverage):validate_coverage(req,decode_coverage_selection(req,raw))
+
+
+def test_markdown_sections_preserve_all_conditions_and_literal_code_headings():
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    text = '# Tradeoff\n\nMigration can win.\n\nOnly if transfer is cheaper.\n\n```text\n# Not a heading\n```\n\n## Other case\n\nRecompute can win.\n\nWhen transfer costs more.\n'
+    req = prepare_coverage('When does each win?',question_requirements('When does each win?'),(PlanSource('s','Comparison','',text),))
+    ids = [p['id'] for p in json.loads(req.payload)['sources'][0]['paragraphs']]
+    assert len(ids) == 2
+    checked = validate_coverage(req,decode_coverage_selection(req,json.dumps(selection(req,ids))))
+    assert ''.join(w.quote for w in checked.items[0].witnesses) == text
+
+
+def test_coverage_purpose_is_bound_and_cannot_reuse_source_receipt():
+    req = request();complete = prepare_coverage(req.question,req.requirements,req.sources,purpose='answer_completeness')
+    assert req.digest != complete.digest
+    with pytest.raises(InvalidEvidenceCoverage):validate_coverage(replace(complete,purpose='source_support'),'{}')
+    with pytest.raises(InvalidEvidenceCoverage):prepare_coverage(req.question,req.requirements,req.sources,purpose='ignore-gaps')
 
 
 def test_diagnostics_never_forward_unrecognized_model_or_exception_text():
     assert InvalidEvidenceCoverage('witness range not in authorized source').code == 'witness_out_of_range'
     assert InvalidEvidenceCoverage('secret-or-source-body').code == 'invalid_request_or_receipt'
-
-
-def test_coverage_purpose_is_bound_and_cannot_reuse_source_receipt():
-    req = request()
-    complete = prepare_coverage(req.question, req.requirements, req.sources, purpose="answer_completeness")
-    assert req.digest != complete.digest
-    assert json.loads(complete.payload)["purpose"] == "answer_completeness"
-    with pytest.raises(InvalidEvidenceCoverage):
-        validate_coverage(replace(complete, purpose="source_support"), '{}')
-    with pytest.raises(InvalidEvidenceCoverage):
-        prepare_coverage(req.question, req.requirements, req.sources, purpose="ignore-gaps")
-
-
-def test_decoder_pairs_endpoints_and_covers_every_nonblank_line_without_truncation():
-    from jsonschema import Draft202012Validator
-    from sage.runtime.evidence_coverage import decode_coverage_selection
-    source = PlanSource('s', 'Source', '', 'heading\r\n\r\n' + 'body ' * 5000 + '\r\ncontinued\r\n\r\nlast')
-    req = prepare_coverage('What is reported?', question_requirements('What is reported?'), (source,))
-    schema = coverage_response_format(req)['json_schema']['schema']
-    witnesses = schema['properties']['items']['items']['properties']['witnesses']
-    covered = set()
-    for paragraph in witnesses['items']['enum']:
-        raw = {'digest': req.digest, 'source_roles': roles(req), 'items': [{'requirement_id': 'question', 'witnesses': [paragraph]}]}
-        assert Draft202012Validator(schema).is_valid(raw)
-        receipt = validate_coverage(req, decode_coverage_selection(req, json.dumps(raw)))
-        value = receipt.items[0].witnesses[0]
-        assert value.quote == ''.join(source.content.splitlines(keepends=True)[value.start_line-1:value.end_line])
-        covered.update(range(value.start_line, value.end_line + 1))
-    assert covered == {i for i, line in enumerate(source.content.splitlines(), 1) if line.strip()}
-    assert witnesses['maxItems'] == 3
-    assert ''.join(line['text'] for line in json.loads(req.payload)['sources'][0]['lines']) == source.content
-    raw['items'][0]['witnesses'] *= 4
-    assert not Draft202012Validator(schema).is_valid(raw)
-    with pytest.raises(InvalidEvidenceCoverage):
-        validate_coverage(req, decode_coverage_selection(req, json.dumps(raw)))
-    # A reversed range is impossible in the model protocol and remains rejected
-    # by the independent canonical validator (including historical receipts).
-    raw['items'][0]['witnesses'] = [{'source_id': 's', 'start_line': 3, 'end_line': 1}]
-    assert not Draft202012Validator(schema).is_valid(raw)
-    with pytest.raises(InvalidEvidenceCoverage):
-        validate_coverage(req, json.dumps(raw))
-
-
-def test_compact_paragraph_decoder_schema_grows_with_ids_not_object_branches():
-    source = PlanSource('s', 'Long source', '', '\n\n'.join('Paragraph ' + str(i) for i in range(1000)))
-    req = prepare_coverage('Question?', question_requirements('Question?'), (source,))
-    assert len(json.dumps(coverage_response_format(req))) < 10000
-
-
-@pytest.mark.parametrize('raw', ['not JSON', '{"digest":"stale","items":[]}', '{"unexpected":true}'])
-def test_model_selection_decode_never_turns_bad_output_into_empty_valid_coverage(raw):
-    from sage.runtime.evidence_coverage import decode_coverage_selection
-    req = request()
-    with pytest.raises(InvalidEvidenceCoverage):
-        validate_coverage(req, decode_coverage_selection(req, raw))
-
-
-def test_markdown_sections_keep_contiguous_evidence_without_truncation_or_reversed_endpoints():
-    from sage.runtime.evidence_coverage import decode_coverage_selection
-    text = '# Tradeoff\n\nMigration can win.\n\nOnly if transfer is cheaper.\n\n```text\n# Not a heading\n```\n\n## Other case\n\nRecompute can win.\n\nWhen transfer costs more.\n'
-    source = PlanSource('s','Comparison','https://example.org/full',text)
-    req = prepare_coverage('When does each win?',question_requirements('When does each win?'),(source,))
-    paragraphs = json.loads(req.payload)['sources'][0]['paragraphs']
-    assert len(paragraphs)==2
-    raw = json.dumps({'digest':req.digest,'source_roles':roles(req),'items':[{'requirement_id':'question',
-        'witnesses':[p['id'] for p in paragraphs]}]})
-    receipt = validate_coverage(req,decode_coverage_selection(req,raw))
-    witnesses=receipt.items[0].witnesses
-    assert ''.join(w.quote for w in witnesses)==text
-    assert 'Migration can win.' in witnesses[0].quote and 'Only if transfer is cheaper.' in witnesses[0].quote
-    assert '# Not a heading' in witnesses[0].quote
-    assert 'Recompute can win.' in witnesses[1].quote and 'When transfer costs more.' in witnesses[1].quote
-    assert json.loads(req.payload)['version']==5
-
-
-@pytest.mark.parametrize('mutation', ['background', 'irrelevant', 'omitted', 'duplicate', 'unknown', 'missing_field'])
-def test_coverage_cannot_promote_background_or_malformed_roles(mutation):
-    from sage.runtime.evidence_coverage import decode_coverage_selection
-    req = request()
-    data = {'digest':req.digest, 'source_roles':roles(req), 'items':[
-        {'requirement_id':r.requirement_id,'witnesses':['p0']} for r in req.requirements]}
-    if mutation in ('background','irrelevant'): data['source_roles'][0]['role'] = mutation
-    if mutation == 'omitted': data.pop('source_roles')
-    if mutation == 'duplicate': data['source_roles'] *= 2
-    if mutation == 'unknown': data['source_roles'][0]['source_id'] = 'other'
-    if mutation == 'missing_field': data['source_roles'][0].pop('studied_subject')
-    with pytest.raises(InvalidEvidenceCoverage):
-        validate_coverage(req, decode_coverage_selection(req,json.dumps(data)))
-
-
-def test_coverage_role_order_precedes_mapping_and_completeness_has_no_role_gate():
-    req = request()
-    assert list(coverage_response_format(req)['json_schema']['schema']['properties']) == ['digest','source_roles','items']
-    req = prepare_coverage(req.question,req.requirements,req.sources,purpose='answer_completeness')
-    assert 'source_roles' not in coverage_response_format(req)['json_schema']['schema']['properties']

@@ -93,8 +93,16 @@ published `public_context` is bound throughout coverage, partitioning, retrieval
 planning, composition and audit; it disambiguates a discipline, never supplies
 facts or changes source permissions.
 
-Model coverage first labels source roles, then selects immutable structural
-blocks from direct sources. Background material cannot silently become a witness.
+Model coverage now uses source-local decisions. Each source first identifies its
+subject and selects a role. Background/irrelevant decisions have no evidence field;
+a direct decision contains a boolean per immutable paragraph for every question
+requirement. Source IDs, requirement IDs and paragraph IDs are unique object keys,
+and each source can select only its own paragraphs. Missing decisions, duplicates,
+unknown keys and cross-source references are rejected, not silently removed.
+This makes role/selection contradictions unrepresentable under the declared grammar.
+The independent canonical receipt still binds exact, complete source ranges.
+Boolean decisions grow linearly with the number of paragraphs; context admission
+and whole-source partitioning remain explicit rather than truncating source text.
 The audit wire protocol selects `checked_sources` blocks before deciding each
 verdict; these are inspected passages, which may include counterevidence.
 The decoder validates every reference and expands only *supported* units to the

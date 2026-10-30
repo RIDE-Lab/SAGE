@@ -67,3 +67,12 @@ never private retrieval context. The same two-attempt and total deadline apply.
 A failed second provider call preserves previously accepted excerpts; these still
 require downstream coverage and source checks and are never declared complete
 merely because the read succeeded.
+
+
+After selected pages are hydrated, their complete returned bodies are rechecked
+against the question. A title or search snippet promising a relevant method is
+not sufficient when the actual page is only catalog metadata or navigation.
+A rejected body can activate the same one complementary search; it does not add
+an unbounded loop. No body is summarized or truncated for this check. Previously
+accepted evidence survives supplemental read/review failures, but downstream
+coverage and fact checks still determine whether it can support an answer.

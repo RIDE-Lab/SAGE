@@ -191,3 +191,64 @@ def test_complementary_provider_failure_preserves_accepted_source():
     result = execute_web_research(WebDecision('auto','guest',True,'approved','public comparison'),
         search, lambda *e: None, review=review)
     assert len(queries) == 2 and [h.title for h in result] == ['one']
+
+
+def test_complementary_review_timeout_cannot_erase_previously_accepted_evidence():
+    from threading import Event
+    release = Event(); finished = Event(); queries = []
+    def search(query):
+        queries.append(query)
+        return [hit('one' if len(queries) == 1 else 'unreviewed')]
+    def review(req):
+        if len(queries) == 2:
+            try:
+                release.wait(2)
+                return receipt(req, dict(digest=req.digest, selected=[1], retry_query=None))
+            finally:
+                finished.set()
+        return receipt(req, dict(digest=req.digest, selected=[0] if req.count else [],
+            retry_query='complement' if req.count else 'first'))
+    events = []
+    try:
+        result = execute_web_research(WebDecision('auto','guest',True,'approved','public comparison'),
+            search, lambda *e: events.append(e), review=review, timeout_seconds=.1)
+        assert [h.title for h in result] == ['one']
+        assert events[-1][0] == 'completed'
+        snapshot = list(events)
+    finally:
+        release.set()
+        assert finished.wait(1)
+    assert events == snapshot
+
+
+def test_catalog_metadata_body_triggers_complementary_search_not_false_coverage():
+    calls = []; body_reviews = []
+    def search(query):
+        calls.append(query)
+        return [hit('catalog' if len(calls) == 1 else 'substantive-paper')]
+    def hydrate(hits):
+        return [SimpleNamespace(**vars(h), source_content='ISBN and ordering only' if h.title == 'catalog'
+            else 'The method compares randomized paired runs and repeated measurements.') for h in hits]
+    def review(req):
+        data = json.loads(req.payload)
+        if not req.count:
+            return receipt(req, dict(digest=req.digest, selected=[], retry_query='method'))
+        if data['candidates'][0]['content']:
+            body_reviews.append(data)
+            if data['candidates'][0]['title'] == 'catalog':
+                return receipt(req, dict(digest=req.digest, selected=[], retry_query='method full paper'))
+        return receipt(req, dict(digest=req.digest, selected=[0], retry_query=None))
+    hits = execute_web_research(WebDecision('auto','guest',True,'approved','public question'),
+        search, lambda *e: None, review=review, hydrate=hydrate)
+    assert calls == ['method','method full paper']
+    assert len(body_reviews) == 2
+    assert [h.title for h in hits] == ['substantive-paper']
+    assert hits[0].source_content.endswith('repeated measurements.')
+
+
+def test_transport_only_adapter_still_preserves_complete_hydrated_body():
+    def hydrate(hits):
+        return [SimpleNamespace(**vars(h), source_content='Complete body.') for h in hits]
+    hits = execute_web_research(WebDecision('auto','guest',True,'approved','query'),
+        lambda q: [hit('source')], lambda *e: None, hydrate=hydrate)
+    assert hits[0].source_content == 'Complete body.'

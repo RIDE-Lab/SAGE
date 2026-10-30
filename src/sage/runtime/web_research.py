@@ -238,6 +238,16 @@ def execute_web_research(
                     observe("running", "搜索入口未返回结果，正在调整公开搜索词。", None)
                 if review is None:
                     hits = candidates
+                    if hits and hydrate is not None and monotonic() < deadline:
+                        accepted = tuple(hits)
+                        try:
+                            enriched = read_tool_executor.call(lambda h=accepted: list(hydrate(h)),
+                                timeout=max(0, min(search_timeout_seconds, deadline-monotonic())))
+                            if [h.url for h in enriched] != [h.url for h in accepted]:
+                                raise ValueError("extraction changed selected source identities")
+                            hits = enriched
+                        except Exception:
+                            observe("running", "部分网页正文暂未取得，保留已取得的来源摘录。", None)
                     break
                 observe("running", "正在检查网页是否切题。", None)
                 # Retain previously accepted partial evidence. A failed second
@@ -253,6 +263,26 @@ def execute_web_research(
                 raw = read_tool_executor.call(lambda r=request: review(r), timeout=max(0, deadline-monotonic()))
                 selected, retry = validate_search_review(request, raw)
                 hits = [candidates[i] for i in selected]
+                if hits and hydrate is not None and monotonic() < deadline:
+                    observe("running", "正在读取入选网页正文。", None)
+                    accepted = tuple(hits)
+                    try:
+                        enriched = read_tool_executor.call(lambda h=accepted: list(hydrate(h)),
+                            timeout=max(0, min(search_timeout_seconds, deadline-monotonic())))
+                        if [h.url for h in enriched] != [h.url for h in accepted]:
+                            raise ValueError("extraction changed selected source identities")
+                    except Exception:
+                        observe("running", "部分网页正文暂未取得，保留已取得的来源摘录。", None)
+                    else:
+                        if any(getattr(h, "source_content", None) != getattr(old, "source_content", None)
+                               for h, old in zip(enriched, accepted)):
+                            observe("running", "正在核对正文是否真正回答本轮问题。", None)
+                            body_request = prepare_search_review(decision.query, enriched,
+                                attempted_queries=attempted_queries, public_context=public_context)
+                            body_raw = read_tool_executor.call(lambda r=body_request: review(r),
+                                timeout=max(0, deadline-monotonic()))
+                            body_selected, retry = validate_search_review(body_request, body_raw)
+                            hits = [enriched[i] for i in body_selected]
                 if not retry or retry in attempted_queries or attempt:
                     break
                 query = retry
@@ -260,28 +290,18 @@ def execute_web_research(
             if monotonic() > deadline:
                 raise TimeoutError("web research deadline exceeded")
     except ReadToolDeadlineExceeded:
-        observe("failed", "搜索等待超时；外部请求可能仍在清理，迟到结果不会作为依据。", None)
-        return []
+        if not hits:
+            observe("failed", "搜索等待超时；外部请求可能仍在清理，迟到结果不会作为依据。", None)
+            return []
+        observe("running", "补充检索等待超时，保留此前已取得的候选来源；迟到结果不会作为依据。", None)
     except Exception:
-        observe("failed", "网页搜索失败或超时；不能声称已取得联网依据。", None)
-        return []
+        if not hits:
+            observe("failed", "网页搜索失败或超时；不能声称已取得联网依据。", None)
+            return []
+        observe("running", "补充检索未完成，保留此前已取得的候选来源。", None)
     if not hits and provider_failed:
         observe("failed", "搜索入口未返回可用结果；本轮没有取得联网依据。", None)
         return []
-    if hits and hydrate is not None and monotonic() < deadline:
-        observe("running", "正在读取入选网页正文。", None)
-        # Discovery is already valid. A slow extraction must not erase accepted
-        # excerpts or let a late worker replace this round's selected sources.
-        try:
-            with web_research_budget(max(0, deadline - monotonic())):
-                selected = tuple(hits)
-                enriched = read_tool_executor.call(lambda h=selected: list(hydrate(h)),
-                    timeout=max(0, min(search_timeout_seconds, deadline - monotonic())))
-            if [h.url for h in enriched] != [h.url for h in selected]:
-                raise ValueError("extraction changed selected source identities")
-            hits = enriched
-        except Exception:
-            observe("running", "部分网页正文暂未取得，保留已取得的来源摘录。", None)
     checked_at = datetime.now(UTC).isoformat()
     observe(
         "completed" if hits else "empty",
