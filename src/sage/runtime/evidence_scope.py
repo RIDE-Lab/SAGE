@@ -15,3 +15,14 @@ forward an old request for experiments. If the referenced material is absent,
 state what is missing instead of inventing the prior content. An explanation of
 previously stated suggestions is not a request to design additional experiments.
 """
+
+
+PUBLIC_SUBJECT_RULES = """
+public_context, when present, is the site's declared public subject area, not
+private identity, permission or factual evidence. Use it to resolve ambiguous
+subjects in the ORIGINAL question. An explicit question in a different field
+overrides it. Preserve that interpretation through source selection, composition
+and verification; retrieved pages must not redefine the subject. A general
+question in a field needs an answer at that scope, not a case study from an
+unrequested field. Do not introduce personal or organizational facts from it.
+"""

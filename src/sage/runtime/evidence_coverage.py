@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 
 from sage.runtime.evidence_relevance import question_identifiers
-from sage.runtime.evidence_scope import CONVERSATION_EVIDENCE_RULES
+from sage.runtime.evidence_scope import CONVERSATION_EVIDENCE_RULES, PUBLIC_SUBJECT_RULES
 from sage.runtime.source_answer_plan import PlanSource, prepare_source_plan
 from sage.runtime.source_audit import AnswerValidationRejected
 
@@ -54,6 +54,7 @@ class CoverageRequest:
     digest: str
     payload: str
     purpose: str = "source_support"
+    public_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,7 +116,17 @@ The purpose field is assigned by the runtime:
 """
 
 
-COVERAGE_SYSTEM_PROMPT += CONVERSATION_EVIDENCE_RULES
+COVERAGE_SYSTEM_PROMPT += """
+For source_support, first return source_roles for EVERY source, before items:
+[{source_id, studied_subject, role: direct|background|irrelevant}]. Direct means
+its text explains the requested relation at the requested scope. A particular
+technique/application/project is background to a GENERAL methodology question
+unless the passage explains generally applicable evaluation controls. Do not
+redefine the question to match a retrieved case study. Shared technical words
+are insufficient. After classifying, select witnesses ONLY from direct sources.
+One source may address only part; use complementary direct sources as needed.
+For answer_completeness return only digest and items; no source_roles.
+""" + CONVERSATION_EVIDENCE_RULES + PUBLIC_SUBJECT_RULES
 
 def question_requirements(question: str) -> tuple[EvidenceRequirement, ...]:
     """Lossless syntactic units, not a claim of semantic decomposition.
@@ -144,8 +155,10 @@ def question_requirements(question: str) -> tuple[EvidenceRequirement, ...]:
 
 def prepare_coverage(
     question: str, requirements: tuple[EvidenceRequirement, ...], sources: tuple[PlanSource, ...],
-    *, purpose: str = "source_support",
+    *, purpose: str = "source_support", public_context: str = "",
 ) -> CoverageRequest:
+    if not isinstance(public_context, str):
+        raise InvalidEvidenceCoverage("invalid public subject context")
     if purpose not in {"source_support", "answer_completeness"}:
         raise InvalidEvidenceCoverage("invalid coverage purpose")
     # Reuse strict source validation without altering content or URLs.
@@ -167,7 +180,7 @@ def prepare_coverage(
     if cursor != len(question):
         raise InvalidEvidenceCoverage("uncovered question suffix")
     paragraph_choices = _paragraph_choices(sources)
-    body = {"version": 4, "question": question, "purpose": purpose,
+    body = {"version": 5, "question": question, "purpose": purpose, "public_context": public_context,
             "requirements": [{**vars(item), "text": question[item.start:item.end]} for item in requirements],
             "sources": [{"source_id": source.source_id, "title": source.title, "url": source.url, "kind": source.kind,
                          "paragraphs": [{"id": key, "start_line": start, "end_line": end}
@@ -177,47 +190,12 @@ def prepare_coverage(
                         for source in sources]}
     digest = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     body["digest"] = digest
-    return CoverageRequest(question, requirements, sources, digest, json.dumps(body, ensure_ascii=False), purpose)
+    return CoverageRequest(question, requirements, sources, digest, json.dumps(body, ensure_ascii=False), purpose, public_context)
 
 
 def _paragraph_choices(sources):
-    """Select lossless structural blocks, not hundreds of adjacent blank-line IDs.
-
-    Markdown section boundaries preserve conditions together with their claims.
-    Plain text retains paragraph granularity. Every ID still resolves to exactly
-    one authorized source range; the model cannot reverse or cross endpoints.
-    """
-    choices = {}
-    for source in sources:
-        start = None
-        lines = source.content.splitlines(keepends=True)
-        headings = []
-        fence = None
-        for index, line in enumerate(lines, 1):
-            marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-            if marker:
-                token = marker.group(1)
-                if fence is None:
-                    fence = token
-                elif token[0] == fence[0] and len(token) >= len(fence) and not line[marker.end():].strip():
-                    fence = None
-                continue
-            if fence is None and re.match(r"^ {0,3}#{1,6}[ \t]+", line):
-                headings.append(index)
-        if headings:
-            boundaries = sorted({1, *headings, len(lines) + 1})
-            for first, stop in zip(boundaries, boundaries[1:]):
-                if any(line.strip() for line in lines[first-1:stop-1]):
-                    choices[f"p{len(choices)}"] = (source.source_id, first, stop - 1)
-            continue
-        for index, line in enumerate([*lines, ""], 1):
-            if line.strip():
-                if start is None:
-                    start = index
-            elif start is not None:
-                choices[f"p{len(choices)}"] = (source.source_id, start, index - 1)
-                start = None
-    return choices
+    from sage.runtime.source_structure import source_blocks
+    return source_blocks((s.source_id, s.content) for s in sources)
 
 
 def coverage_response_format(request: CoverageRequest) -> dict:
@@ -230,7 +208,7 @@ def coverage_response_format(request: CoverageRequest) -> dict:
                  "items": {"type": "string", "enum": list(choices)}}
     if not choices:
         witnesses = {"type": "array", "maxItems": 0, "items": {"type": "string"}}
-    return {"type": "json_schema", "json_schema": {"name": "evidence_coverage", "strict": True,
+    result = {"type": "json_schema", "json_schema": {"name": "evidence_coverage", "strict": True,
         "schema": {"type": "object", "additionalProperties": False,
             "required": ["digest", "items"], "properties": {
                 "digest": {"type": "string", "enum": [request.digest]},
@@ -240,6 +218,22 @@ def coverage_response_format(request: CoverageRequest) -> dict:
                         "required": ["requirement_id", "witnesses"], "properties": {
                             "requirement_id": {"type": "string", "enum": [r.requirement_id for r in request.requirements]},
                             "witnesses": witnesses}}}}}}}
+
+    if request.purpose == "source_support":
+        schema = result["json_schema"]["schema"]
+        ids = [source.source_id for source in request.sources]
+        roles = {"type": "array", "minItems": len(ids), "maxItems": len(ids), "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["source_id", "studied_subject", "role"], "properties": {
+                "source_id": {"type": "string", "enum": ids},
+                "studied_subject": {"type": "string", "minLength": 1},
+                "role": {"type": "string", "enum": ["direct", "background", "irrelevant"]}}}}
+        if not ids:
+            roles = {"type": "array", "maxItems": 0, "items": {"type": "string"}}
+        schema["required"] = ["digest", "source_roles", "items"]
+        schema["properties"] = {"digest": schema["properties"]["digest"],
+            "source_roles": roles, "items": schema["properties"]["items"]}
+    return result
 
 
 def decode_coverage_selection(request: CoverageRequest, response: str) -> str:
@@ -256,6 +250,21 @@ def decode_coverage_selection(request: CoverageRequest, response: str) -> str:
     choices = _paragraph_choices(request.sources)
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
         return response
+    roles = None
+    if request.purpose == "source_support":
+        entries = data.pop("source_roles", None)
+        roles, allowed = {}, {source.source_id for source in request.sources}
+        if not isinstance(entries, list) or len(entries) != len(allowed):
+            data["invalid_source_roles"] = True
+            return json.dumps(data, ensure_ascii=False)
+        for entry in entries:
+            if (not isinstance(entry, dict) or set(entry) != {"source_id", "studied_subject", "role"}
+                    or not isinstance(entry["source_id"], str) or entry["source_id"] not in allowed
+                    or entry["source_id"] in roles or entry["role"] not in ("direct", "background", "irrelevant")
+                    or not isinstance(entry["studied_subject"], str) or not entry["studied_subject"].strip()):
+                data["invalid_source_roles"] = True
+                return json.dumps(data, ensure_ascii=False)
+            roles[entry["source_id"]] = entry["role"]
     for item in data["items"]:
         if not isinstance(item, dict) or not isinstance(item.get("witnesses"), list):
             continue
@@ -266,7 +275,10 @@ def decode_coverage_selection(request: CoverageRequest, response: str) -> str:
         for value in item["witnesses"]:
             if isinstance(value, str) and value in choices:
                 source, start, end = choices[value]
-                decoded.append({"source_id": source, "start_line": start, "end_line": end})
+                if roles is not None and roles[source] != "direct":
+                    decoded.append({"invalid_paragraph_selection": "non_direct_source"})
+                else:
+                    decoded.append({"source_id": source, "start_line": start, "end_line": end})
             else:
                 # A canonical range is not a model wire selection. Preserve an
                 # invalid marker rather than accepting a second model protocol.
@@ -285,7 +297,7 @@ def _unique(pairs):
 
 
 def validate_coverage(request: CoverageRequest, response: str) -> CoverageAssessment:
-    fresh = prepare_coverage(request.question, request.requirements, request.sources, purpose=request.purpose)
+    fresh = prepare_coverage(request.question, request.requirements, request.sources, purpose=request.purpose, public_context=request.public_context)
     if request.digest != fresh.digest or request.payload != fresh.payload:
         raise InvalidEvidenceCoverage("coverage request content changed")
     try:

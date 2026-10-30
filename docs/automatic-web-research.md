@@ -20,9 +20,14 @@ additional semantic local-only constraint is carried as `local_only_span` from
 the current question. Model mistakes can conservatively deny a search; they
 must never expand the trusted source capabilities.
 
-Never pass source snippets, conversation history, private attachments or a model-
-rewritten query to the external transport. Queries must be contiguous spans of
-the current question. Common credential/email guards are defense in depth, not
+The disclosure decision first binds a contiguous public span of the current
+question. The optional query planner sees only that approved span, public
+candidate snippets, and a configured published discipline. It may derive technical
+search terms from that data; conversation history, private attachments and internal
+retrieval-repair queries must never reach it or the external transport. An explicitly
+selected public discipline is searched as a quoted phrase to prevent optional
+bag-of-words matching from erasing its meaning. An explicit question about another
+field overrides that default, with the decision bound in the relevance receipt. Common credential/email guards are defense in depth, not
 complete secret/PII recognition. Semantic public/private classification is
 fallible; the host should deny requests with private attachments/channel context
 and must not describe this policy as a formal data-loss-prevention guarantee.

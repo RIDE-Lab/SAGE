@@ -137,6 +137,10 @@ def test_request_cannot_be_rebound_while_reusing_the_digest(field):
         validate_coverage(replace(req, **{field: replacements[field]}), response(req))
 
 
+def roles(req):
+    return [{"source_id": s.source_id, "studied_subject": "fixture", "role": "direct"} for s in req.sources]
+
+
 def test_decoder_schema_binds_selections_to_original_source_paragraphs():
     from jsonschema import Draft202012Validator
     from sage.runtime.evidence_coverage import decode_coverage_selection
@@ -146,7 +150,7 @@ def test_decoder_schema_binds_selections_to_original_source_paragraphs():
     ))
     validator = Draft202012Validator(coverage_response_format(req)['json_schema']['schema'])
     def mapping(value):
-        return {'digest': req.digest, 'items': [{'requirement_id': 'question', 'witnesses': [value]}]}
+        return {'digest': req.digest, 'source_roles': roles(req), 'items': [{'requirement_id': 'question', 'witnesses': [value]}]}
     for paragraph, source, end in [('p0', 'wiki', 3), ('p1', 'web', 1)]:
         assert validator.is_valid(mapping(paragraph))
         receipt = validate_coverage(req, decode_coverage_selection(req, json.dumps(mapping(paragraph))))
@@ -183,7 +187,7 @@ def test_decoder_pairs_endpoints_and_covers_every_nonblank_line_without_truncati
     witnesses = schema['properties']['items']['items']['properties']['witnesses']
     covered = set()
     for paragraph in witnesses['items']['enum']:
-        raw = {'digest': req.digest, 'items': [{'requirement_id': 'question', 'witnesses': [paragraph]}]}
+        raw = {'digest': req.digest, 'source_roles': roles(req), 'items': [{'requirement_id': 'question', 'witnesses': [paragraph]}]}
         assert Draft202012Validator(schema).is_valid(raw)
         receipt = validate_coverage(req, decode_coverage_selection(req, json.dumps(raw)))
         value = receipt.items[0].witnesses[0]
@@ -225,7 +229,7 @@ def test_markdown_sections_keep_contiguous_evidence_without_truncation_or_revers
     req = prepare_coverage('When does each win?',question_requirements('When does each win?'),(source,))
     paragraphs = json.loads(req.payload)['sources'][0]['paragraphs']
     assert len(paragraphs)==2
-    raw = json.dumps({'digest':req.digest,'items':[{'requirement_id':'question',
+    raw = json.dumps({'digest':req.digest,'source_roles':roles(req),'items':[{'requirement_id':'question',
         'witnesses':[p['id'] for p in paragraphs]}]})
     receipt = validate_coverage(req,decode_coverage_selection(req,raw))
     witnesses=receipt.items[0].witnesses
@@ -233,4 +237,26 @@ def test_markdown_sections_keep_contiguous_evidence_without_truncation_or_revers
     assert 'Migration can win.' in witnesses[0].quote and 'Only if transfer is cheaper.' in witnesses[0].quote
     assert '# Not a heading' in witnesses[0].quote
     assert 'Recompute can win.' in witnesses[1].quote and 'When transfer costs more.' in witnesses[1].quote
-    assert json.loads(req.payload)['version']==4
+    assert json.loads(req.payload)['version']==5
+
+
+@pytest.mark.parametrize('mutation', ['background', 'irrelevant', 'omitted', 'duplicate', 'unknown', 'missing_field'])
+def test_coverage_cannot_promote_background_or_malformed_roles(mutation):
+    from sage.runtime.evidence_coverage import decode_coverage_selection
+    req = request()
+    data = {'digest':req.digest, 'source_roles':roles(req), 'items':[
+        {'requirement_id':r.requirement_id,'witnesses':['p0']} for r in req.requirements]}
+    if mutation in ('background','irrelevant'): data['source_roles'][0]['role'] = mutation
+    if mutation == 'omitted': data.pop('source_roles')
+    if mutation == 'duplicate': data['source_roles'] *= 2
+    if mutation == 'unknown': data['source_roles'][0]['source_id'] = 'other'
+    if mutation == 'missing_field': data['source_roles'][0].pop('studied_subject')
+    with pytest.raises(InvalidEvidenceCoverage):
+        validate_coverage(req, decode_coverage_selection(req,json.dumps(data)))
+
+
+def test_coverage_role_order_precedes_mapping_and_completeness_has_no_role_gate():
+    req = request()
+    assert list(coverage_response_format(req)['json_schema']['schema']['properties']) == ['digest','source_roles','items']
+    req = prepare_coverage(req.question,req.requirements,req.sources,purpose='answer_completeness')
+    assert 'source_roles' not in coverage_response_format(req)['json_schema']['schema']['properties']

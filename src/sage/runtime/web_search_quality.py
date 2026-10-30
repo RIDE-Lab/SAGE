@@ -106,6 +106,10 @@ def search_review_format(request):
                     'id':{'type':'integer','minimum':0,'maximum':request.count-1},
                     'studied_object':{'type':'string'}, 'measured_outcome':{'type':'string'},
                     'role':{'type':'string','enum':['direct','background','irrelevant']}}}}
+    schema = result['json_schema']['schema']
+    schema['properties'] = {key: schema['properties'][key] for key in
+        ('digest', 'domain_context', 'candidate_roles', 'selected', 'retry_query')
+        if key in schema['properties']}
     return result
 
 
@@ -146,7 +150,11 @@ def validate_search_review(request, raw):
         if scope is not None and scope != context:
             raise ValueError('unapproved search domain')
         if retry and scope:
-            retry = scope + ' ' + retry
+            # Keep the explicitly selected published discipline together. An
+            # unquoted prefix becomes optional bag-of-words evidence to search
+            # engines and can drift to a different field. This is a query
+            # constraint, never evidence or an identity-derived permission.
+            retry = json.dumps(scope, ensure_ascii=False) + ' ' + retry
     return tuple(i for i in data['selected'] if roles.get(i) == 'direct'),retry
 
 

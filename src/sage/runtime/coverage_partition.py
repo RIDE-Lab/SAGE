@@ -31,7 +31,7 @@ def assess_source_groups(request, assess, repair=None):
     receipts = []
     for sources in (request.sources[:middle], request.sources[middle:]):
         child = prepare_coverage(request.question, request.requirements, sources,
-                                 purpose=request.purpose)
+                                 purpose=request.purpose, public_context=request.public_context)
         raw = assess_source_groups(child, assess, repair)
         try:
             receipt = validate_coverage(child, raw)

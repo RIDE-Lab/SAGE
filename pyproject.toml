@@ -30,6 +30,7 @@ sage-dev = "sage.tools.cli.commands.dev:run_with_suggestions"
 sage-edge = "sage.edge.server:main"
 
 [project.optional-dependencies]
+structured-output = ["xgrammar>=0.2.8,<0.3"]
 delivery-markdown = [
     "mdformat==1.0.0",
     "mdformat-gfm==1.0.0",

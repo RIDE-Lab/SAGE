@@ -87,7 +87,7 @@ def test_audit_schema_binds_each_sources_own_line_ids():
     from jsonschema import validate, ValidationError
     request=prepare_source_audit('Status?',GOOD,{'short':'one','long':'line\n'*100})
     schema=audit_response_format(request)['json_schema']['schema']
-    data={'digest':request.digest,'units':[{'id':0,'verdict':'supported','evidence':[{'source_id':'short','line_ids':[50]}]}]}
+    data={'digest':request.digest,'units':[{'id':0,'verdict':'supported','checked_sources':[{'source_id':'short','block_ids':['p0']}]}]}
     with pytest.raises(ValidationError):validate(data,schema)
 
 
@@ -165,9 +165,126 @@ def test_single_line_audit_schema_cannot_force_duplicate_line_references():
     request = prepare_source_audit('Status?', 'It is ongoing.', {'one':'Ongoing.'})
     schema = audit_response_format(request)['json_schema']['schema']
     raw = {'digest':request.digest,'units':[{'id':0,'verdict':'supported',
-        'evidence':[{'source_id':'one','line_ids':[0,0]}]}]}
+        'checked_sources':[{'source_id':'one','block_ids':['p0','p0']}]}]}
     with pytest.raises(ValidationError):
         validate(raw, schema)
-    raw['units'][0]['evidence'][0]['line_ids'] = [0]
+    raw['units'][0]['checked_sources'][0]['block_ids'] = ['p0']
     validate(raw, schema)
-    assert audit_failures(request, json.dumps(raw)) == ()
+    from sage.runtime.source_audit import decode_audit_blocks
+    assert audit_failures(request, decode_audit_blocks(request, json.dumps(raw))) == ()
+
+
+@pytest.mark.parametrize('failure', [None, 'twice', 'stale', 'transport', 'unsupported'])
+def test_audit_wire_repair_is_visible_bound_and_never_restarts_generation(failure):
+    from sage.runtime.source_audit import AuditProtocolRejected
+    class WirePorts(Ports):
+        repairs = 0
+        original_request = None
+        def audit_answer(self, request):
+            self.original_request = request
+            if failure == 'transport':
+                raise TimeoutError('transport failure')
+            raise AuditProtocolRejected('wrong' if failure == 'stale' else request.digest,
+                                        'untrusted malformed receipt', 'overlap')
+        def repair_audit(self, request, rejected, failure_code):
+            self.repairs += 1
+            assert request == self.original_request
+            assert rejected == 'untrusted malformed receipt' and failure_code == 'overlap'
+            if failure == 'twice':
+                raise AuditProtocolRejected(request.digest, 'still invalid', 'overlap')
+            if failure == 'unsupported':
+                return json.dumps({'digest':request.digest, 'units':[
+                    {'id':i,'verdict':'unsupported','evidence':[]} for i in range(len(request.units))]})
+            return super().audit_answer(request)
+    runtime, ports, events = EvidenceWorkflowRuntime(), WirePorts(), []
+    try:
+        with ExecutionObserver(events.append).bind():
+            if failure:
+                with pytest.raises(FlowRequestOutcomeError) as error:
+                    runtime.run('What is known about measurements?', (SOURCE,), ports, timeout=5)
+                assert error.value.error_type == ("TimeoutError" if failure == "transport" else "SourceAuditRejected")
+            else:
+                assert runtime.run('What is known about measurements?', (SOURCE,), ports, timeout=5).answer == GOOD
+        assert ports.writes == (2 if failure == 'unsupported' else 1)
+        assert ports.repairs == (0 if failure in ('stale','transport') else 2 if failure == 'unsupported' else 1)
+        assert sum(e.state == 'started' and e.operator_key == 'review-natural-answer-correct-audit' for e in events) == int(failure not in ('stale','transport'))
+    finally:
+        runtime.close()
+
+
+def test_public_subject_context_survives_all_evidence_stages_without_becoming_a_source():
+    class ScopedPorts(Ports):
+        def assess(self, request):
+            assert request.public_context == 'Computer systems'
+            assert request.question == 'What is known about measurements?'
+            assert json.loads(request.payload)['public_context'] == 'Computer systems'
+            return super().assess(request)
+        def write_answer(self, request, rejected, failures):
+            assert json.loads(request.payload)['public_context'] == 'Computer systems'
+            return super().write_answer(request, rejected, failures)
+        def audit_answer(self, request):
+            data = json.loads(request.payload)
+            assert data['public_context'] == 'Computer systems'
+            assert {s['id'] for s in data['sources']} == {'s'}
+            return super().audit_answer(request)
+    runtime = EvidenceWorkflowRuntime()
+    try:
+        work = runtime.run('What is known about measurements?', (SOURCE,), ScopedPorts(),
+                           timeout=5, public_context='Computer systems')
+        assert work.answer == GOOD
+        from sage.runtime.evidence_coverage import InvalidEvidenceCoverage
+        with pytest.raises(InvalidEvidenceCoverage):
+            render_evidence_work(replace(work,request=replace(work.request,public_context='changed')))
+    finally:
+        runtime.close()
+
+
+def test_bound_revision_changes_only_rejected_sentence_and_preserves_layout():
+    from sage.runtime.natural_answer import (prepare_natural_revision, natural_revision_response_format,
+                                           apply_natural_revision)
+    request = prepare_natural_answer('How?', (SOURCE,))
+    answer = 'Stable sentence. Unsupported guarantee.\n\n- Keep the value 1.5.\n  Keep this too.'
+    revision = prepare_natural_revision(request, answer, ('unit:1',))
+    schema = natural_revision_response_format(revision)['json_schema']['schema']
+    assert schema['properties']['replacements']['required'] == ['1']
+    assert schema['properties']['additional_paragraphs']['maxItems'] == 0
+    raw = json.dumps({'digest': revision.digest, 'replacements': {'1': None}, 'additional_paragraphs': []})
+    result = validate_natural_answer(request, apply_natural_revision(request, revision, raw))
+    assert result == 'Stable sentence.\n\n- Keep the value 1.5.\n  Keep this too.'
+    # A repeated sentence is addressed by its position, never global replace.
+    repeated = 'Same. Same. Same.'
+    revision = prepare_natural_revision(request, repeated, ('unit:1',))
+    raw = json.dumps({'digest': revision.digest, 'replacements': {'1': ' Changed.'}, 'additional_paragraphs': []})
+    assert validate_natural_answer(request, apply_natural_revision(request, revision, raw)) == 'Same. Changed. Same.'
+
+
+def test_revision_rejects_stale_missing_extra_and_unchanged_edits():
+    from dataclasses import replace
+    from sage.runtime.natural_answer import prepare_natural_revision, apply_natural_revision
+    request = prepare_natural_answer('How?', (SOURCE,))
+    revision = prepare_natural_revision(request, 'Fact. Guarantee.', ('unit:1',))
+    base = {'digest': revision.digest, 'replacements': {'1': ' Qualified.'}, 'additional_paragraphs': []}
+    for change in ({'digest': 'other'}, {'replacements': {}}, {'replacements': {'0': 'Changed'}},
+                   {'replacements': {'1': 'Guarantee.'}}, {'replacements': {'1': ''}},
+                   {'additional_paragraphs': ['Extra claim.']}):
+        with pytest.raises(SourceAuditRejected):
+            apply_natural_revision(request, revision, json.dumps({**base, **change}))
+    altered = replace(revision, payload=revision.payload.replace('Guarantee.', 'Other.'))
+    with pytest.raises(SourceAuditRejected): apply_natural_revision(request, altered, json.dumps(base))
+    other = prepare_natural_answer('Another question?', (SOURCE,))
+    with pytest.raises(SourceAuditRejected): apply_natural_revision(other, revision, json.dumps(base))
+
+
+def test_revision_can_complete_missing_part_but_does_not_bypass_source_audit():
+    from sage.runtime.natural_answer import prepare_natural_revision, apply_natural_revision
+    request = prepare_natural_answer('How?', (SOURCE,))
+    revision = prepare_natural_revision(request, 'Fact.', ('question:question',))
+    raw = json.dumps({'digest': revision.digest, 'replacements': {}, 'additional_paragraphs': ['New claim.']})
+    # Applying a proposal is separate from acceptance; runtime still reviews it.
+    assert validate_natural_answer(request, apply_natural_revision(request, revision, raw)) == 'Fact.\n\nNew claim.'
+
+
+def test_audit_decoding_selects_evidence_before_verdict():
+    request = prepare_source_audit('Status?', GOOD, {'s': SOURCE.content})
+    fields = audit_response_format(request)['json_schema']['schema']['properties']['units']['items']['properties']
+    assert list(fields) == ['id', 'checked_sources', 'verdict']

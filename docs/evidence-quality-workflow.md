@@ -2,7 +2,8 @@
 
 `sage.runtime.evidence_workflow.EvidenceWorkflowRuntime` is a single persistent
 native flow for read-only evidence work. Applications supply request-scoped
-`assess`, `supplement`, `compose` and `plan_experiments` ports, not another scheduler.
+`assess`, `supplement`, `write_answer`, `audit_answer` and `plan_experiments`
+ports, not another scheduler.
 
 The flow is:
 
@@ -16,8 +17,10 @@ The flow is:
    measurements, never verdict or falsifier prose. SAGE renders the distinct
    invariant counterexample and performance confidence-bound rules. Selected
    factual sources cannot be changed by this stage.
-5. Verify exact source rendering and render any remaining evidence gaps as
-   original question spans, explicitly not negative factual conclusions.
+5. Compose natural prose from the selected sources, audit every sentence and
+   check question completeness. At most one semantic revision is reviewed again.
+   Render any remaining evidence gaps as original question spans, explicitly not
+   negative factual conclusions.
 
 Native observations expose these actual decisions, nodes and call relationships.
 The complete declared graph includes inactive repair/research branches. A
@@ -62,8 +65,9 @@ unconstrained factual generation. Resolved/business turns remain resolved.
 - Supplement accepts only missing original question spans and returns immutable
   `PlanSource` records. Conflicting reuse of a source ID is rejected. The runtime
   preserves all existing sources rather than replacing them with an abstract.
-- `assess(request)` returns coverage JSON; `compose(request, assessment)` returns
-  factual source-plan JSON with no freeform inferences; `plan_experiments(request, plan)`
+- `assess(request)` returns coverage JSON; `write_answer` returns natural prose
+  bound to the factual plan and `audit_answer` returns a complete source receipt.
+  `plan_experiments(request, plan)`
   returns typed experiment JSON (`experiment_response_format`). Fact selection
   is fixed before this stage. The exact experiment receipt is revalidated and
   canonically rendered before publication; arbitrary replacement prose fails.
@@ -79,3 +83,40 @@ failure simply because a quality subflow was introduced.
 
 This module's synthetic unit/integration fixtures do not qualify real model
 quality, live ACL behavior, application integration or production deployment.
+
+## Natural composition and bounded correction
+
+The factual answer is composed as question-led prose, followed by a complete
+sentence-level source audit and a separate question-completeness check. Sources
+stay in the basis records, not as pasted documents in the answer. The optional
+published `public_context` is bound throughout coverage, partitioning, retrieval
+planning, composition and audit; it disambiguates a discipline, never supplies
+facts or changes source permissions.
+
+Model coverage first labels source roles, then selects immutable structural
+blocks from direct sources. Background material cannot silently become a witness.
+The audit wire protocol selects `checked_sources` blocks before deciding each
+verdict; these are inspected passages, which may include counterevidence.
+The decoder validates every reference and expands only *supported* units to the
+canonical positive-evidence receipt. An unsupported verdict always remains a
+rejection, even when it cites an inspected passage. No evidence text is truncated.
+
+A malformed audit receipt may be corrected once against the same draft/source
+snapshot in an observed native node. This cannot rerun retrieval, generation or
+business effects. Terminal validation failures keep `SourceAuditRejected` rather
+than being mistaken for transport ambiguity.
+
+Semantic answer correction uses a bound revision: one explicit replacement or
+removal per failed sentence, with other sentences preserved. Additional paragraphs
+are permitted only for missing requested parts. Stale snapshots, omitted edits,
+unchanged rejected sentences, unauthorized expansion and invalid references fail.
+Applying a revision does not accept it: the entire revised answer is audited again.
+
+Adapters may declare the verified vLLM grammar capability and install
+`SAGE[structured-output]`. `compact_json_grammar` restricts insignificant JSON
+whitespace while retaining the schema, string content and answer length. It fails
+explicitly without its optional dependency; it does not fall back to unconstrained
+text. Prose generation and entailment review have different model requirements:
+qualify the configured model sampling and native reasoning on real positive and
+negative controls, not only shape-valid JSON. This library does not select or
+silently replace the application's model.
