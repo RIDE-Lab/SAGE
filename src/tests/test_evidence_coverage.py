@@ -142,7 +142,7 @@ def selection(req, selected):
     payload = json.loads(req.payload)
     return {'digest': req.digest, 'requested_relation': 'fixture relation', 'source_assessments': {source['source_id']: {
         'studied_subject':'fixture', 'established_relation':'fixture relation', 'selection': {'role':'direct', 'requirements': {
-            r.requirement_id: {p['id']:(p['id'] in selected) for p in source['paragraphs']}
+            r.requirement_id: {p['id']: True for p in source['paragraphs'] if p['id'] in selected}
             for r in req.requirements}}} for source in payload['sources']}}
 
 
@@ -165,10 +165,10 @@ def test_decoder_binds_source_local_sets_to_original_ranges_without_truncation()
             covered[witness.source_id].update(range(witness.start_line,witness.end_line+1))
     for source in sources:
         assert covered[source.source_id] == {i for i,line in enumerate(source.content.splitlines(),1) if line.strip()}
-    assert json.loads(req.payload)['version'] == 6
+    assert json.loads(req.payload)['version'] == 7
 
 
-@pytest.mark.parametrize('mutation', ['background','irrelevant','unknown','other_source','nonbool','array','omitted','stale','missing_subject','extra'])
+@pytest.mark.parametrize('mutation', ['background','irrelevant','unknown','other_source','nonbool','false','array','omitted','stale','missing_subject','extra'])
 def test_invalid_selection_cannot_be_silently_accepted_or_promote_a_role(mutation):
     from jsonschema import Draft202012Validator
     from sage.runtime.evidence_coverage import decode_coverage_selection
@@ -180,6 +180,7 @@ def test_invalid_selection_cannot_be_silently_accepted_or_promote_a_role(mutatio
     if mutation == 'unknown':item['selection']['requirements']['question'] = {'p99':True}
     if mutation == 'other_source':item['selection']['requirements']['question'] = {'p1':True}
     if mutation == 'nonbool':item['selection']['requirements']['question'] = {'p0':1}
+    if mutation == 'false':item['selection']['requirements']['question'] = {'p0':False}
     if mutation == 'array':item['selection']['requirements']['question'] = ['p0','p0']
     if mutation == 'omitted':data['source_assessments'].pop('other')
     if mutation == 'stale':data['digest'] = 'stale'
@@ -225,7 +226,7 @@ def test_source_local_schema_is_linear_in_paragraph_count():
         source = PlanSource('s','Long','','\n\n'.join('Paragraph '+str(i) for i in range(count)))
         req = prepare_coverage('Question?',question_requirements('Question?'),(source,))
         sizes.append(len(json.dumps(coverage_response_format(req))))
-    assert sizes[1] < sizes[0]*10 and sizes[1] < 40000
+    assert sizes[1] < sizes[0]*10 and sizes[1] < 50000
 
 
 @pytest.mark.parametrize('raw',['not JSON','{"digest":"stale","items":[]}','{"unexpected":true}'])

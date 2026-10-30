@@ -5,10 +5,13 @@ scheduler. All decisions use immutable receipts. There is one bounded repair
 round, never automatic replay of business writes or an unbounded model loop.
 """
 
+import json
+
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 
 from sage.runtime.answer_task import AnswerTask
+from sage.runtime.scope_audit import scope_failures
 from sage.runtime.coverage_partition import assess_source_groups
 from sage.runtime.evidence_coverage import (
     CoverageAssessment,
@@ -43,7 +46,7 @@ from sage.runtime.source_answer_plan import (
     prepare_source_plan,
     render_source_plan_blocks,
 )
-from sage.runtime.source_audit import SourceAuditRejected, AuditProtocolRejected, prepare_source_audit
+from sage.runtime.source_audit import InvalidSourceAudit, SourceAuditRejected, AuditProtocolRejected, prepare_source_audit
 
 _ports = ContextVar("sage_evidence_workflow_ports")
 
@@ -68,6 +71,7 @@ class EvidenceWork:
     answer_failures: tuple[str, ...] = ()
     rejected_audit: str | None = None
     audit_failure: str | None = None
+    scope_audit_required: bool = False
     final_audit_required: bool = False
     final_audit: str | None = None
 
@@ -76,14 +80,27 @@ def _selected_request(work):
     # Always select against the COMPLETE candidate snapshot, not the previously
     # narrowed set. Repeated selection must not progressively erase subjects.
     # A matching identifier is a relevance hint, not an independent fact check.
-    complete = prepare_coverage(work.request.question, work.request.requirements, work.candidates, public_context=work.request.public_context)
+    complete = prepare_coverage(work.request.question, work.request.requirements, work.candidates, public_context=work.request.public_context, requested_relation=work.request.requested_relation)
     if complete.digest != work.candidate_digest:
         raise InvalidEvidenceCoverage("authorized candidate snapshot changed")
     indices = subject_candidate_indices(question_identifiers(work.request.question), tuple(
         source.title + "\n" + source.content for source in work.candidates))
     return prepare_coverage(work.request.question, work.request.requirements,
         tuple(source for index, source in enumerate(work.candidates)
-              if index in indices or source.kind == "conversation"), public_context=work.request.public_context)
+              if index in indices or source.kind == "conversation"), public_context=work.request.public_context, requested_relation=work.request.requested_relation)
+
+
+@stateless(uri="stateless://sage/evidence/interpret-question", namespace="sage")
+def interpret_question(work):
+    interpreter = getattr(_ports.get(), "interpret_question", None)
+    if interpreter is None:
+        return work
+    from sage.runtime.evidence_question import prepare_question_relation, validate_question_relation
+    original = prepare_question_relation(work.request.question, work.request.public_context)
+    relation = validate_question_relation(original, interpreter(original))
+    request = prepare_coverage(work.request.question, work.request.requirements, work.candidates,
+        public_context=work.request.public_context, requested_relation=relation)
+    return replace(work, request=request, candidate_digest=request.digest)
 
 
 @stateless(uri="stateless://sage/evidence/select", namespace="sage")
@@ -172,7 +189,7 @@ def supplement(work):
         if source.source_id in sources and sources[source.source_id] != source:
             raise InvalidEvidenceCoverage("source identity changed during coverage workflow")
         sources[source.source_id] = source
-    complete = prepare_coverage(work.request.question, work.request.requirements, tuple(sources.values()), public_context=work.request.public_context)
+    complete = prepare_coverage(work.request.question, work.request.requirements, tuple(sources.values()), public_context=work.request.public_context, requested_relation=work.request.requested_relation)
     return replace(work, candidates=complete.sources, candidate_digest=complete.digest,
         assessment=None, repair_attempted=True)
 
@@ -214,13 +231,19 @@ def _audit_request(work, answer):
 
 def _answer_coverage_request(work, answer):
     return prepare_coverage(work.request.question, work.request.requirements,
-        (PlanSource("answer", "Answer", "", answer),), purpose="answer_completeness", public_context=work.request.public_context)
+        (PlanSource("answer", "Answer", "", answer),), purpose="answer_completeness", public_context=work.request.public_context, requested_relation=work.request.requested_relation)
 
 
 def _review_failures(work, receipt):
     if receipt.request_digest != _natural_request(work).digest:
         raise SourceAuditRejected("stale natural answer receipt")
-    failed = tuple("unit:" + str(i) for i in audit_failures(_audit_request(work, receipt.answer), receipt.audit))
+    audit_request = _audit_request(work, receipt.answer)
+    try:
+        scoped = scope_failures(audit_request, receipt.scope_audit) if work.scope_audit_required else ()
+    except InvalidSourceAudit as exc:
+        raise SourceAuditRejected("scope review requires a complete bound receipt") from exc
+    failed = tuple("scope:" + str(i) for i in scoped) + tuple("unit:" + str(i)
+        for i in audit_failures(audit_request, receipt.audit) if i not in scoped)
     coverage = validate_coverage(_answer_coverage_request(work, receipt.answer), receipt.coverage)
     # Preserve every aspect that the authorized source assessment could cover.
     missing = set(coverage.missing_ids) - set(work.assessment.missing_ids)
@@ -232,15 +255,25 @@ def write_answer(work):
     if work.plan is None or not work.plan.source_ids:
         return work
     request = _natural_request(work)
-    answer = validate_natural_answer(request, _ports.get().write_answer(request, work.draft, work.answer_failures))
+    kwargs = {}
+    if work.natural is not None and work.scope_audit_required:
+        audit_request = _audit_request(work, work.natural.answer)
+        failed = scope_failures(audit_request, work.natural.scope_audit)
+        if failed:
+            decisions = json.loads(work.natural.scope_audit)["units"]
+            kwargs["scope_feedback"] = {str(i): decisions[str(i)] for i in failed}
+    answer = validate_natural_answer(request, _ports.get().write_answer(
+        request, work.draft, work.answer_failures, **kwargs))
     return replace(work, draft=answer, natural=None, answer_failures=(), final_audit=None)
 
 
 def _review_receipt(work, audit):
     receipt = NaturalAnswerReceipt(_natural_request(work).digest, work.draft, audit,
-        _ports.get().assess(_answer_coverage_request(work, work.draft)))
+        _ports.get().assess(_answer_coverage_request(work, work.draft)),
+        _ports.get().scope_check(_audit_request(work, work.draft)) if work.scope_audit_required else None)
     return replace(work, natural=receipt, answer_failures=_review_failures(work, receipt),
-                   rejected_audit=None, audit_failure=None)
+                   rejected_audit=None, audit_failure=None,
+                   final_audit=audit if work.final_audit_required else None)
 
 
 @stateless(uri="stateless://sage/evidence/review-answer", namespace="sage")
@@ -249,7 +282,8 @@ def review_answer(work):
         return work
     request = _audit_request(work, work.draft)
     try:
-        audit = _ports.get().audit_answer(request)
+        auditor = (_ports.get().final_audit_answer if work.final_audit_required else _ports.get().audit_answer)
+        audit = auditor(request)
     except AuditProtocolRejected as exc:
         if exc.digest != request.digest or not callable(getattr(_ports.get(), "repair_audit", None)):
             raise SourceAuditRejected("unrepairable audit receipt") from exc
@@ -297,34 +331,6 @@ def answer_rejected(work):
 def answer_accepted(work):
     return not work.answer_failures
 
-
-
-@stateless(uri="stateless://sage/evidence/needs-final-audit", namespace="sage")
-def needs_final_audit(work):
-    return work.final_audit_required and work.draft is not None
-
-
-@stateless(uri="stateless://sage/evidence/no-final-audit", namespace="sage")
-def no_final_audit(work):
-    return not (work.final_audit_required and work.draft is not None)
-
-
-@stateless(uri="stateless://sage/evidence/final-audit", namespace="sage")
-def final_audit(work):
-    # Fast reviews may guide a single bounded revision, but cannot authorize
-    # publication under this policy. Audit EVERY unit of the final draft once,
-    # with the same complete immutable sources, not just previously failed units.
-    if work.natural is None or work.draft != work.natural.answer:
-        raise SourceAuditRejected("final audit requires a bound reviewed draft")
-    try:
-        audit = _ports.get().final_audit_answer(_audit_request(work, work.draft))
-    except AuditProtocolRejected as exc:
-        raise SourceAuditRejected("final audit receipt failed validation") from exc
-    receipt = replace(work.natural, audit=audit)
-    failures = _review_failures(work, receipt)
-    if failures:
-        raise SourceAuditRejected("final answer failed source or completeness review")
-    return replace(work, natural=receipt, final_audit=audit, answer_failures=())
 
 
 def _answer_source_ids(work):
@@ -415,7 +421,8 @@ def verify(work):
 
 @flow(uri="flow://sage/evidence-quality", namespace="sage")
 def evidence_quality_flow(init_stream):
-    checked = _assessed(init_stream.map(select_evidence, operator_key="select-evidence"), "assess-coverage")
+    interpreted = init_stream.map(interpret_question, operator_key="interpret-question")
+    checked = _assessed(interpreted.map(select_evidence, operator_key="select-evidence"), "assess-coverage")
     repaired = _assessed(checked.filter(needs_repair, operator_key="coverage-gap").map(
         plan_retrieval_repair, operator_key="plan-retrieval-repair").map(
         supplement, operator_key="supplement-evidence").map(
@@ -429,10 +436,11 @@ def evidence_quality_flow(init_stream):
     corrected = _reviewed(drafted.filter(answer_rejected, operator_key="answer-needs-correction").map(
         write_answer, operator_key="correct-natural-answer"), "review-corrected-answer")
     prepared = corrected.connect(drafted.filter(answer_accepted, operator_key="answer-review-passed"))
-    final = prepared.filter(needs_final_audit, operator_key="requires-final-source-audit").map(
-        final_audit, operator_key="final-source-audit")
-    return final.connect(prepared.filter(no_final_audit, operator_key="no-final-source-audit")).map(
-        verify, operator_key="verify-evidence-answer")
+    # Each draft was already checked by the publication-grade auditor. A
+    # correction resets its receipt and reruns the SAME full audit. Do not audit
+    # an unchanged accepted draft again or substitute a fast preflight verdict.
+    return prepared.map(verify, operator_key="verify-evidence-answer")
+
 
 
 class EvidenceWorkflowRuntime:
@@ -459,10 +467,13 @@ class EvidenceWorkflowRuntime:
         final_required = getattr(ports, "requires_final_audit", False)
         if type(final_required) is not bool or (final_required and not callable(getattr(ports, "final_audit_answer", None))):
             raise ValueError("final audit policy requires an explicit audit adapter")
+        scope_required = getattr(ports, "requires_scope_audit", False)
+        if type(scope_required) is not bool or (scope_required and not callable(getattr(ports, "scope_check", None))):
+            raise ValueError("scope audit policy requires an explicit audit adapter")
         token = _ports.set(ports)
         try:
             outputs = self._endpoint.call(EvidenceWork(request, candidates=sources,
-                candidate_digest=request.digest, research=research, final_audit_required=final_required,
+                candidate_digest=request.digest, research=research, final_audit_required=final_required, scope_audit_required=scope_required,
                 experiments_requested=research if task is None else task.experiments_requested), timeout=timeout)
         finally:
             _ports.reset(token)

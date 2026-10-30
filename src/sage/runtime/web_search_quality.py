@@ -37,6 +37,13 @@ available. Relevance is not completeness: when selected candidates only cover
 one alternative, a specialized scenario, or one requested relation, retain them
 and propose a complementary retry_query for the missing public information need.
 Do not equate one specific implementation/scenario with a broader technical term.
+For a broad explanation or methodology question, a paper proposing a particular
+new method is partial evidence for that proposal, not by itself a general
+account of established practice. Request a complementary query for foundational
+methods, baseline controls and limitations if these are not explained by the
+selected set. Do not merely search for more copies of the same proposal. A
+substantive general guide may suffice on its own; no arbitrary source count
+is required.
 Stop with retry_query null when the selected set covers the requested comparison
 and conditions, or when no faithful complementary query can be proposed.
 Keep all complementary direct candidates, not just the highest-ranked page.
@@ -56,7 +63,9 @@ choose conventional technical search terms a domain expert would use to find a
 useful explanation. Translate concepts, not individual words. For broad methods
 questions, search for foundational methodology, practical evaluation guidance
 and controls; do not specialize the question to an unrequested application or
-industry. Prefer English technical terminology, preserving proper names.
+industry. Prefer concise standard terms used in foundational guidance over a
+long literal translation with repeated synonyms. Prefer English technical
+terminology, preserving proper names.
 attempted_queries are unsuccessful queries: use a different formulation when
 present. Do not add private facts, credentials or inferred personal context.
 Return JSON only: {"digest": supplied digest, "selected": [],

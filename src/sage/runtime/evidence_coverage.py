@@ -55,6 +55,7 @@ class CoverageRequest:
     payload: str
     purpose: str = "source_support"
     public_context: str = ""
+    requested_relation: str = ""
 
 
 @dataclass(frozen=True)
@@ -93,9 +94,9 @@ requested_relation BEFORE selecting a role. Shared subject words do not make a
 source direct if it explains a different relationship. A technical implementation
 narrative cannot substitute for a general method of evaluating or comparing it.
 If it is direct evidence, selection is {role:"direct", requirements:{
-requirement_id:{paragraph_id:true|false,...}, ...}}. Include every requirement
-and every paragraph key from THIS source; true selects evidence, false excludes
-it. All false means this source supplies no witness for that question part.
+requirement_id:{paragraph_id:true,...}, ...}}. Include every requirement, but
+only the selected paragraph keys from THIS source. Omission means not selected;
+{} means this source supplies no witness for that question part. Never emit false.
 For background/irrelevant sources, selection has ONLY role, with no requirements.
 Never copy a paragraph ID from another source. Select each ID at most once.
 Answer-completeness sources use direct role; they are candidate answer text,
@@ -131,6 +132,9 @@ The purpose field is assigned by the runtime:
 
 
 COVERAGE_SYSTEM_PROMPT += """
+When requested_relation is supplied, it was interpreted WITHOUT sources and
+is immutable. Echo it exactly. Do not reinterpret the question to make a source
+fit; compare the source's established relation to this fixed information need.
 For source_support, classify each source before selecting its paragraphs. Direct means
 its text explains the requested relation at the requested scope. A particular
 technique/application/project is background to a GENERAL methodology question
@@ -168,9 +172,9 @@ def question_requirements(question: str) -> tuple[EvidenceRequirement, ...]:
 
 def prepare_coverage(
     question: str, requirements: tuple[EvidenceRequirement, ...], sources: tuple[PlanSource, ...],
-    *, purpose: str = "source_support", public_context: str = "",
+    *, purpose: str = "source_support", public_context: str = "", requested_relation: str = "",
 ) -> CoverageRequest:
-    if not isinstance(public_context, str):
+    if not isinstance(public_context, str) or not isinstance(requested_relation, str):
         raise InvalidEvidenceCoverage("invalid public subject context")
     if purpose not in {"source_support", "answer_completeness"}:
         raise InvalidEvidenceCoverage("invalid coverage purpose")
@@ -193,7 +197,7 @@ def prepare_coverage(
     if cursor != len(question):
         raise InvalidEvidenceCoverage("uncovered question suffix")
     paragraph_choices = _paragraph_choices(sources)
-    body = {"version": 6, "question": question, "purpose": purpose, "public_context": public_context,
+    body = {"version": 7, "question": question, "purpose": purpose, "public_context": public_context, "requested_relation": requested_relation,
             "requirements": [{**vars(item), "text": question[item.start:item.end]} for item in requirements],
             "sources": [{"source_id": source.source_id, "title": source.title, "url": source.url, "kind": source.kind,
                          "paragraphs": [{"id": key, "start_line": start, "end_line": end}
@@ -203,7 +207,7 @@ def prepare_coverage(
                         for source in sources]}
     digest = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     body["digest"] = digest
-    return CoverageRequest(question, requirements, sources, digest, json.dumps(body, ensure_ascii=False), purpose, public_context)
+    return CoverageRequest(question, requirements, sources, digest, json.dumps(body, ensure_ascii=False), purpose, public_context, requested_relation)
 
 
 def _paragraph_choices(sources):
@@ -217,9 +221,9 @@ def coverage_response_format(request: CoverageRequest) -> dict:
     choices = _paragraph_choices(request.sources)
     properties = {}
     for source in request.sources:
-        selected = {key: {"type": "boolean"} for key, (sid, _, _) in choices.items() if sid == source.source_id}
+        selected = {key: {"type": "boolean", "enum": [True]} for key, (sid, _, _) in choices.items() if sid == source.source_id}
         requirements = {r.requirement_id: {"type": "object", "additionalProperties": False,
-            "properties": selected, "required": list(selected)} for r in request.requirements}
+            "properties": selected} for r in request.requirements}
         direct = {"type": "object", "additionalProperties": False,
             "required": ["role", "requirements"], "properties": {
                 "role": {"type": "string", "enum": ["direct"]}, "requirements": {"type": "object",
@@ -235,7 +239,7 @@ def coverage_response_format(request: CoverageRequest) -> dict:
     schema = {"type": "object", "additionalProperties": False,
         "required": ["digest", "requested_relation", "source_assessments"], "properties": {
             "digest": {"type": "string", "enum": [request.digest]},
-            "requested_relation": {"type": "string", "minLength": 1},
+            "requested_relation": ({"type": "string", "enum": [request.requested_relation]} if request.requested_relation else {"type": "string", "minLength": 1}),
             "source_assessments": {"type": "object", "additionalProperties": False,
                 "required": list(properties), "properties": properties}}}
     return {"type": "json_schema", "json_schema": {"name": "evidence_coverage", "strict": True, "schema": schema}}
@@ -250,7 +254,8 @@ def decode_coverage_selection(request: CoverageRequest, response: str) -> str:
     try:
         data = json.loads(response, object_pairs_hook=_unique)
         if (not isinstance(data, dict) or set(data) != {"digest", "requested_relation", "source_assessments"} or data["digest"] != request.digest
-                or not isinstance(data["requested_relation"], str) or not data["requested_relation"].strip()):
+                or not isinstance(data["requested_relation"], str) or not data["requested_relation"].strip()
+                or request.requested_relation and data["requested_relation"] != request.requested_relation):
             raise ValueError("invalid source selection envelope")
         entries = data["source_assessments"]
         if not isinstance(entries, dict) or set(entries) != {s.source_id for s in request.sources}:
@@ -277,8 +282,8 @@ def decode_coverage_selection(request: CoverageRequest, response: str) -> str:
                 raise ValueError("incomplete source requirements")
             for requirement_id, selected in parts.items():
                 allowed = {key for key, (sid, _, _) in choices.items() if sid == source.source_id}
-                if (not isinstance(selected, dict) or set(selected) != allowed
-                        or any(type(value) is not bool for value in selected.values())):
+                if (not isinstance(selected, dict) or not set(selected) <= allowed
+                        or any(value is not True for value in selected.values())):
                     raise ValueError("invalid source-local witness")
                 # Deterministic document order, independent of JSON key order.
                 for key, (sid, start, end) in choices.items():
@@ -301,7 +306,7 @@ def _unique(pairs):
 
 
 def validate_coverage(request: CoverageRequest, response: str) -> CoverageAssessment:
-    fresh = prepare_coverage(request.question, request.requirements, request.sources, purpose=request.purpose, public_context=request.public_context)
+    fresh = prepare_coverage(request.question, request.requirements, request.sources, purpose=request.purpose, public_context=request.public_context, requested_relation=request.requested_relation)
     if request.digest != fresh.digest or request.payload != fresh.payload:
         raise InvalidEvidenceCoverage("coverage request content changed")
     try:

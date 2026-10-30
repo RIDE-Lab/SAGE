@@ -130,13 +130,67 @@ negative controls, not only shape-valid JSON. This library does not select or
 silently replace the application's model.
 
 
-When an adapter declares `requires_final_audit=True`, the ordinary source reviews
-are preflight feedback only. One final native `final-source-audit` node reviews
-**every** sentence of the final draft against the complete immutable source
-snapshot, after any bounded correction. The final receipt replaces the preflight
-receipt; rendering requires that exact receipt. The draft's already-bound
-completeness receipt is revalidated without another model call. A final rejection
-or malformed receipt stops publication; it cannot fall back to preflight approval.
-No-source notices do not fabricate an audit event. Adapters without this policy
-retain their existing qualified review contract. Model qualification and actual
+When an adapter declares `requires_final_audit=True`, every draft review calls
+its publication-grade auditor directly. It checks **every** sentence against the
+complete immutable source snapshot; a faster preliminary verdict cannot authorize
+publication. An accepted, unchanged draft is not audited a second time. A bounded
+revision clears the old receipt and repeats the same full audit on the revised
+answer. Malformed serialization gets at most one bound correction at the same
+review strength. Rendering requires the exact final audit and completeness receipts.
+No-source notices do not fabricate an audit event. Model qualification and actual
 end-to-end latency remain separate acceptance requirements.
+
+Coverage wire v7 is a sparse source-local set: each question requirement is
+mandatory, and selected paragraph keys have value `true`; omitted keys mean not
+selected. Explicit `false`, unknown/cross-source keys and duplicate keys are
+rejected, not silently normalized. Full source text and immutable paragraph IDs
+remain unchanged; only serialization of negative decisions is removed.
+
+Research proposals and workload-scoped findings must retain their scope. A
+paper advocating a method is not evidence that all alternatives fail or that its
+method is universally necessary. Qualified source reports and conditional
+mathematical consequences remain admissible. Qualify this distinction with real
+positive and negative controls, not only protocol fixtures.
+
+Execution time is separate from generation depth. `execution_budget_seconds`
+selects the host's declared extended budget when publication requires native
+verification, even if the user disables deep generation. Hosts must apply the
+same selection to worker cancellation and user-visible timing. This remains a
+bounded overall deadline, with unchanged per-tool timeouts, admission limits and
+idempotency; it is not permission to silently retry a generation or write.
+
+Adapters may additionally require `requires_scope_audit=True`. The independent
+`scope_check` receives the question and exact answer units, bound to the same
+full-source digest, without repeating source rhetoric. It can only veto an
+unqualified generalization and trigger a bounded revision. Its counterexamples
+are never evidence and cannot authorize facts. Every unit needs an explicit
+decision; missing, duplicate or stale decisions fail closed. Rendering requires
+both this receipt and the unchanged publication-grade source/completeness checks.
+Revisions rerun all checks. Real-model false-positive and false-negative controls
+remain necessary; schema validity is not a semantic quality measurement.
+
+### Question identity and source scope
+
+The optional `interpret_question` model port receives only the exact original
+question and configured public subject context. It cannot see retrieved sources.
+Its validated relation is frozen into coverage, partition, supplemental search,
+answer construction and completeness receipts. The relation is a model
+interpretation, not proof of relevance: original-question live acceptance remains
+required. Changing it invalidates the bound source assessment.
+
+A proposal in one paper must remain attributed and scoped in natural prose.
+General methodology retrieval asks for complementary baseline evidence when a
+new proposal alone does not explain established controls. Each answer unit must
+be both responsive and entailed; being copied from a source cannot authorize a
+tangent or an unqualified universal claim.
+
+Source admission additionally compares only the declared established relations
+with the frozen information need. This separate review can remove witnesses
+from a candidate, never introduce evidence or promote background. Its receipt
+is bound to the entire original coverage mapping. Full source text remains
+available for the publication-grade audit. A controlled native-admission
+experiment was inconsistent and was not retained as an extra slow gate.
+
+Bound revisions also reject a replacement that reproduces an unaffected sentence
+or duplicates a newly inserted sentence. This is an explicit validation failure,
+not automatic deletion: the runtime does not silently rewrite approved prose.

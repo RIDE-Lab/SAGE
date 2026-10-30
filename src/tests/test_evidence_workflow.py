@@ -439,7 +439,7 @@ def test_missing_coverage_plans_search_inside_native_flow_and_revalidates_source
 
 
 @pytest.mark.parametrize('reject', [False, True])
-def test_final_audit_is_required_even_when_preflight_accepts_every_unit(reject):
+def test_each_draft_uses_publication_grade_audit_without_redundant_preflight(reject):
     class FinalPorts(Ports):
         requires_final_audit = True
         final_calls = 0
@@ -460,12 +460,12 @@ def test_final_audit_is_required_even_when_preflight_accepts_every_unit(reject):
             assert result.final_audit == result.natural.audit
             with pytest.raises(Exception, match='missing bound final source audit'):
                 render_evidence_work(replace(result, final_audit=None))
-        assert ports.final_calls == 1
+        assert ports.final_calls == (2 if reject else 1)
     finally:
         runtime.close()
 
 
-def test_corrected_draft_gets_one_final_audit_with_every_unit_and_full_sources():
+def test_corrected_draft_gets_fresh_full_audit_and_never_reuses_prior_receipt():
     class FinalPorts(Ports):
         requires_final_audit = True
         drafts = 0
@@ -474,19 +474,19 @@ def test_corrected_draft_gets_one_final_audit_with_every_unit_and_full_sources()
             self.drafts += 1
             return super().write_answer(request, rejected, failures)
         def audit_answer(self, request):
-            raw = json.loads(super().audit_answer(request))
+            pytest.fail('publication-grade policy must not use a fast preflight')
+        def final_audit_answer(self, request):
+            self.finals.append(request)
+            raw = json.loads(Ports.audit_answer(self, request))
             if self.drafts == 1:
                 raw['units'][0].update(verdict='unsupported', evidence=[])
             return json.dumps(raw)
-        def final_audit_answer(self, request):
-            self.finals.append(request)
-            return Ports.audit_answer(self, request)
     ports, runtime = FinalPorts(), EvidenceWorkflowRuntime()
     try:
         result = runtime.run('A and B?', (SOURCE,SUPPLEMENT), ports, timeout=5)
-        assert ports.drafts == 2 and len(ports.finals) == 1
-        assert len(ports.finals[0].sources) == 2
-        assert len(ports.finals[0].units) > 1
+        assert ports.drafts == 2 and len(ports.finals) == 2
+        assert all(len(request.sources) == 2 for request in ports.finals)
+        assert all(len(request.units) > 1 for request in ports.finals)
         assert result.final_audit and result.answer_failures == ()
     finally:
         runtime.close()
@@ -503,3 +503,55 @@ def test_no_evidence_notice_does_not_fabricate_final_audit():
         assert result.final_audit_required and result.final_audit is None
     finally:
         runtime.close()
+
+
+def test_scope_veto_requires_repair_and_cannot_replace_full_source_audit():
+    class ScopedPorts(Ports):
+        requires_final_audit = True
+        requires_scope_audit = True
+        drafts = 0
+        audits = 0
+        scopes = 0
+        def write_answer(self, request, rejected=None, failures=(), *, scope_feedback=None):
+            self.drafts += 1
+            if self.drafts == 2:
+                assert 'scope:0' in failures
+                assert scope_feedback == {'0': 'Unqualified necessity has an alternative.'}
+            return super().write_answer(request, rejected, failures)
+        def final_audit_answer(self, request):
+            self.audits += 1
+            return super().audit_answer(request)
+        def scope_check(self, request):
+            self.scopes += 1
+            return json.dumps({'digest':request.digest,'units':{str(i):
+                'Unqualified necessity has an alternative.' if i==0 and self.drafts==1 else None
+                for i in range(len(request.units))}})
+    ports, runtime = ScopedPorts(), EvidenceWorkflowRuntime()
+    try:
+        result = runtime.run('Explain A?', (SOURCE,), ports, timeout=5)
+        assert ports.drafts == ports.audits == ports.scopes == 2
+        assert result.scope_audit_required
+        with pytest.raises(Exception):
+            render_evidence_work(replace(result,natural=replace(result.natural,scope_audit=None)))
+    finally:runtime.close()
+
+
+def test_question_interpretation_precedes_sources_and_survives_repair_and_composition():
+    class InterpretedPorts(Ports):
+        def interpret_question(self, request):
+            assert set(json.loads(request.payload)) == {"question","public_context","digest"}
+            self.calls.append(("interpret", request.digest))
+            return json.dumps({"digest":request.digest,"requested_relation":"Explain A and B roles."})
+        def assess(self, request):
+            assert request.requested_relation == "Explain A and B roles."
+            return super().assess(request)
+        def write_answer(self, request, rejected=None, failures=()):
+            assert json.loads(request.payload)["requested_relation"] == "Explain A and B roles."
+            return super().write_answer(request,rejected,failures)
+    ports, runtime = InterpretedPorts(missing=True), EvidenceWorkflowRuntime()
+    try:
+        result = runtime.run("A and B?", (SOURCE,), ports, timeout=5)
+        assert ports.calls[0][0] == "interpret"
+        assert result.repair_attempted
+        assert result.request.requested_relation == "Explain A and B roles."
+    finally: runtime.close()

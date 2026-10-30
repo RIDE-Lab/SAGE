@@ -22,8 +22,23 @@ unit requires source lines entailing ALL its claims, qualifiers, scope,
 negation and temporal status. A real quote alone is not sufficient. Ongoing
 research does not entail no benchmarks, no deployments or prototype-only status.
 Use strict entailment, not plausibility, topical relevance or consistency.
-For each target ask: could ALL cited source lines be true while this sentence
-is false? If yes, mark unsupported. A warning about interpretation does not
+A research paper's advocacy of its own method is not independent evidence that
+this is the only valid method or a universal prerequisite. Distinguish "the
+paper proposes/reports X under assumptions Y" from "everyone must use X" or
+"all alternatives fail". The latter requires evidence at that same scope;
+a source's self-promotional recommendation is insufficient. Equations with
+explicit premises can justify their conditional mathematical consequences,
+not universal empirical performance. Actively test alternative explanations
+and preserve the source's workload, assumptions and status as a proposal.
+
+For each target ask: could the document accurately report its observations and
+its authors' proposals while the answer's claim about the world is false?
+If yes, mark unsupported. Do NOT assume every author assertion/recommendation
+in a document is an independently verified universal fact. A proposal is
+admissible as a proposal; a measured finding retains its experimental scope.
+A recommendation to use X establishes that the authors recommend X, not that
+X is necessary for everyone. This source-status distinction applies even when
+the draft closely repeats an imperative or a sweeping claim from the paper. A warning about interpretation does not
 establish the maturity, validation history or product status of its subject.
 For example, "a method is under development; design is not a measured gain"
 is compatible with both tested and untested implementations. It does NOT entail

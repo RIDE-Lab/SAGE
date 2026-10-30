@@ -7,6 +7,23 @@ It is an execution contract, not a claim that evidence or an answer is correct.
 
 from dataclasses import dataclass
 from typing import Literal
+from math import isfinite
+
+
+def execution_budget_seconds(*, standard, extended, requires_native_verification=False,
+                             explicit_deep_reasoning=False):
+    """Allocate the host's declared budget from actual execution requirements.
+
+    Publication-grade native verification is backend work even when the user
+    disables deep answer generation. This does not change either quality gate,
+    retry count or model output allowance. Hosts must use this same decision for
+    cancellation and timing reports; it is not an unbounded deadline extension.
+    """
+    if (not isfinite(standard) or not isfinite(extended) or standard <= 0
+            or extended < standard or type(requires_native_verification) is not bool
+            or type(explicit_deep_reasoning) is not bool):
+        raise ValueError("invalid workflow execution budget")
+    return extended if requires_native_verification or explicit_deep_reasoning else standard
 
 
 @dataclass(frozen=True)

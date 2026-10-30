@@ -75,3 +75,13 @@ def test_explicit_source_contract_is_distinct_from_opportunistic_retrieval():
     assert denied.evidence_required and denied.quality == "source_grounded"
     resolved = plan_workflow(WorkflowRequirements(requested_sources=("wiki",), resolved=True), caps)
     assert not resolved.evidence_required
+
+
+def test_native_verification_budget_does_not_depend_on_user_deep_generation_toggle():
+    from sage.runtime.adaptive_workflow import execution_budget_seconds
+    assert execution_budget_seconds(standard=80, extended=240) == 80
+    assert execution_budget_seconds(standard=80, extended=240, requires_native_verification=True) == 240
+    assert execution_budget_seconds(standard=80, extended=240, explicit_deep_reasoning=True) == 240
+    for values in ({'standard': 0, 'extended': 240}, {'standard': 80, 'extended': 40},
+                   {'standard': 80, 'extended': float('inf')}):
+        with pytest.raises(ValueError):execution_budget_seconds(**values)

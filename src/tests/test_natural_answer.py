@@ -288,3 +288,35 @@ def test_audit_decoding_selects_evidence_before_verdict():
     request = prepare_source_audit('Status?', GOOD, {'s': SOURCE.content})
     fields = audit_response_format(request)['json_schema']['schema']['properties']['units']['items']['properties']
     assert list(fields) == ['id', 'checked_sources', 'verdict']
+
+
+def test_scope_counterexamples_are_bound_feedback_not_new_evidence():
+    from sage.runtime.natural_answer import prepare_natural_revision, apply_natural_revision
+    request = prepare_natural_answer('How?', (SOURCE,))
+    original = 'Everyone must use M.'
+    feedback = {'0': 'Another method can meet these conditions.'}
+    revision = prepare_natural_revision(request, original, ('scope:0',), scope_feedback=feedback)
+    payload = json.loads(revision.payload)
+    assert payload['scope_counterexamples'] == feedback
+    assert payload['sources'] == json.loads(request.payload)['sources']
+    raw = json.dumps({'digest': revision.digest, 'replacements': {'0': 'The authors propose M.'}, 'additional_paragraphs': []})
+    assert validate_natural_answer(request, apply_natural_revision(request, revision, raw)) == 'The authors propose M.'
+    altered = replace(revision, payload=revision.payload.replace('Another method can meet', 'No method can meet'))
+    with pytest.raises(SourceAuditRejected): apply_natural_revision(request, altered, raw)
+    for invalid in ({}, {'1':'wrong sentence'}, {'0':None}):
+        with pytest.raises(ValueError):
+            prepare_natural_revision(request, original, ('scope:0',), scope_feedback=invalid)
+
+
+@pytest.mark.parametrize("replacement", [
+    "The source does not report measurements. The project is ongoing.",
+    "The source does not report measurements. The source does not report measurements.",
+])
+def test_bound_revision_cannot_paste_whole_answer_or_duplicate_prose(replacement):
+    from sage.runtime.natural_answer import prepare_natural_revision, apply_natural_revision
+    request = prepare_natural_answer("Status?", (SOURCE,))
+    revision = prepare_natural_revision(request,
+        "The authors never measured. The project is ongoing.", ("unit:0",))
+    raw = json.dumps({"digest":revision.digest, "replacements":{"0":replacement}, "additional_paragraphs":[]})
+    with pytest.raises(SourceAuditRejected):
+        apply_natural_revision(request, revision, raw)

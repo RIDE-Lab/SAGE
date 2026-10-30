@@ -16,7 +16,7 @@ are not factual evidence; the runtime will retrieve and validate actual text.
 
 def query_plan_payload(request, assessment):
     return json.dumps({'digest': request.digest, 'question': request.question,
-        'public_context': request.public_context, 'missing_parts': missing_question_spans(request, assessment)}, ensure_ascii=False)
+        'public_context': request.public_context, 'requested_relation': request.requested_relation, 'missing_parts': missing_question_spans(request, assessment)}, ensure_ascii=False)
 
 
 def query_plan_format(request):
